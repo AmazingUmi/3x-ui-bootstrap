@@ -1,24 +1,28 @@
-# 贡献说明
+# Contributing
 
-## 本地检查
+English | [简体中文](CONTRIBUTING.zh-CN.md)
 
-需要 Bash、Python 3.10+ 和 Git。在仓库根目录运行：
+## Local checks
+
+You need Bash, Python 3.10+, and Git. From the repository root, run:
 
 ~~~bash
 bash scripts/check.sh
 ~~~
 
-检查不申请证书、不安装软件、不连接真实 ISP、不修改系统服务。涉及发行包、面板 API、证书、路由或客户端兼容性的修改，需要额外记录 VPS / Shadowrocket / Mihomo 验收结果。
+Checks do not request certificates, install software, connect to real ISP proxies, or change system services. Changes to release packages, panel APIs, certificates, routing, or client compatibility need additional VPS / Shadowrocket / Mihomo acceptance results.
 
-## 修改约定
+## Change guidelines
 
-- 安装入口为 install-3x-ui.sh，用户设置仅来自独立 JSON；保留脚本和配置两个文件即可上传的方式。
-- 不支持旧配置别名或 Shell source 配置。新增字段同步更新示例、文档和边界测试。
-- Xray 固定 26.6.27；升级必须提供两个客户端的真实验收记录。
-- 保留安装归属校验、失败续跑、已有客户端身份、流量计数和部署日，不盲目覆盖手工面板修改。
-- ISP 失效不得自动回退 Direct。原生客户端配额和整机流量账单分开说明。
-- 提交只包含示例数据；检查暂存区中的配置、日志、账号、订阅和密钥。
+- The installation entry point is install-3x-ui.sh. User settings come only from a separate JSON file. Preserve deployment by uploading just the script and configuration.
+- Do not add legacy configuration aliases or source Shell configuration files. Update the example, documentation, and boundary tests when adding a field.
+- Keep Xray pinned to 26.6.27. Upgrades require actual acceptance results from both clients.
+- Preserve ownership checks, resumable installation, existing client identities, traffic counters, and the original deployment day. Do not blindly overwrite manual panel changes.
+- ISP failure must not automatically fall back to Direct. Explain native client quotas separately from whole-server traffic billing.
+- Commit only example data. Check staged configurations, logs, accounts, subscriptions, and keys for private information.
 
-## 发布准备
+Documentation defaults to English, with Simplified Chinese copies named *.zh-CN.md. Keep both languages in sync, including field requirements, default values, commands, and verification limits.
 
-发布正式版本前，由项目所有者确定许可证，并完成新配置入口的 VPS 验收。本地测试通过不代表部署或客户端验收通过。
+## Release preparation
+
+Before a formal release, the project owner must select a license and complete VPS acceptance testing for the new configuration entry point. Passing local checks does not establish successful deployment or client connectivity.

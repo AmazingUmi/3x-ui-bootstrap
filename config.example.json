@@ -1,21 +1,28 @@
 {
   "SERVER_IP": "YOUR_VPS_IP",
+
   "NODE_NAME": "MyNode",
   "NODE_MODE": "direct",
-  "NODE_PORT": 443,
-  "ISP_NODE_PORT": 8443,
-  "ISP_PROTOCOL": "socks5",
+
   "ISP_HOST": "",
   "ISP_PORT": null,
   "ISP_USERNAME": "",
   "ISP_PASSWORD": "",
+
+  "ISP_PROTOCOL": "socks5",
   "ISP_EXPECTED_IP": "",
-  "PANEL_PORT": 7777,
-  "SUB_PORT": 2096,
+
   "SUB_DOMAIN": "",
   "PANEL_HTTPS": false,
+  "ACME_EMAIL": "",
+
+  "NODE_PORT": 443,
+  "ISP_NODE_PORT": 8443,
+  "PANEL_PORT": 7777,
+  "SUB_PORT": 2096,
+
   "TOTAL_MONTHLY_GB": 0,
   "ISP_MONTHLY_GB": 0,
-  "ACME_EMAIL": "",
+
   "REALITY_HOST": "www.cloudflare.com"
 }

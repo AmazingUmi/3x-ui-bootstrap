@@ -1,20 +1,22 @@
-# 常见问题
+# Troubleshooting
 
-## 配置校验失败
+English | [简体中文](troubleshooting.zh-CN.md)
 
-先运行 bash install-3x-ui.sh --config config.json --validate-config。JSON 不支持注释，端口应为数字，布尔值应为 true / false；确认配置文件权限为 600。
+## Configuration validation fails
 
---validate-config 只验证本地格式及逻辑，不验证 DNS、ISP 账号、系统端口占用或公网可达性。后者在 VPS 上使用 --check，再完成真实客户端验收。
+Run bash install-3x-ui.sh --config config.json --validate-config first. JSON does not allow comments; ports must be numbers and Boolean values must be true / false. Check that configuration permissions are 600.
 
-## 域名仍指向旧 IP
+--validate-config checks only local syntax and configuration logic. It does not check DNS, ISP authentication, system port occupancy, or public reachability. Run --check on the VPS for system and upstream prerequisites, then use real clients to test public reachability.
 
-核对权威 DNS 的 A 记录，再分别查询常用公共 DNS。清理 VPS 的本地缓存不能强制公共递归 DNS 提前过期；等待 TTL 和解析同步，并确认没有启用 CDN 代理。
+## The domain still resolves to an old IP
 
-## 面板或订阅无法访问
+Check the A record at the authoritative DNS provider, then query common public resolvers separately. Clearing the VPS's local cache cannot force public recursive resolvers to expire cached records early. Wait for the TTL and DNS propagation, and confirm CDN proxying is disabled.
 
-确认完整 URL 中的协议、端口、随机路径和订阅 ID。SSH 面板必须先建立隧道；公网 HTTPS 面板需要开放面板端口。订阅默认使用 2096/TCP，与面板、节点端口各自独立。
+## The panel or subscription is unreachable
 
-检查 VPS：
+Check the full URL's scheme, port, random base path, and subscription ID. An SSH-only panel requires an active tunnel; a public HTTPS panel requires its panel port to be open. Subscriptions default to 2096/TCP, separate from panel and node ports.
+
+On the VPS, check:
 
 ~~~bash
 sudo systemctl status x-ui --no-pager
@@ -23,22 +25,22 @@ sudo ufw status verbose
 sudo journalctl -u x-ui -n 80 --no-pager
 ~~~
 
-同时核对云防火墙。UFW inactive 表示它未启用，单独添加规则不会解决其他路径的问题。
+Also check the cloud firewall. UFW inactive means UFW is not enabled; adding a UFW rule alone will not resolve a problem elsewhere on the connection path.
 
-## ISP 出站能测通，客户端仍不通
+## The ISP outbound test passes, but clients cannot connect
 
-分开确认：上游代理可用、正式入站的认证及转发可用、客户端到 VPS 的 TCP 连接可用。
+Verify three layers separately: the upstream proxy works, authentication and forwarding through the actual inbound work, and the client can establish a TCP connection to the VPS.
 
-本机验收通过不能替代客户端公网测试。切换 Wi-Fi / 蜂窝网络做对照；必要时捕获客户端连接对应的数据包。TCP 端口测试也不能替代真实 VLESS 认证。桌面启用 TUN 时，普通连接测试可能被代理接管，需要核对测试实际走的路径。
+Server-side loopback success does not replace public client testing. Compare Wi-Fi and cellular connectivity, and capture packets for the relevant client connection if needed. A TCP port test does not validate VLESS authentication. On a desktop with TUN enabled, connection tests may themselves be proxied; confirm which path the test actually uses.
 
-面板手工更换 bootstrap-isp 后，先同步私有配置，保留入站标签和指向 bootstrap-isp 的路由，再保存并应用面板设置。不要先重装或运行旧参数的 --configure-nodes。
+After manually changing bootstrap-isp in the panel, update the private configuration, retain the inbound tag and routing to bootstrap-isp, then save and apply the panel settings. Do not start by reinstalling or running --configure-nodes with old parameters.
 
-## Shadowrocket 连接失败
+## Shadowrocket cannot connect
 
-确认内核仍为固定的 26.6.27，核对 UUID、Vision flow、REALITY 公钥、SNI、Short ID、客户端连接地址和入站端口。项目固定版本基于既有客户端验收；更换内核或客户端后需要重新测试。
+Confirm that Xray remains pinned to 26.6.27. Check the UUID, Vision flow, REALITY public key, SNI, Short ID, client server address, and inbound port. The pinned version follows prior client acceptance tests; retest after changing the core or client version.
 
---diagnose 使用临时回环副本检查 REALITY 握手目标；它不复现正式 ISP 出站，也不证明公网客户端路径可用。
+--diagnose uses a temporary loopback copy to test the REALITY handshake target. It does not reproduce the actual ISP outbound or prove that the public client path works.
 
-## 安装中断
+## Installation was interrupted
 
-保留 /var/lib/3x-ui-bootstrap、数据库和私有日志。修复原因后使用同一配置重试；不要清空状态目录。日志和状态可能包含凭据，分享前需脱敏。
+Keep /var/lib/3x-ui-bootstrap, the database, and private logs. Fix the cause and retry with the same configuration; do not clear the state directory. Logs and state may contain credentials, so redact them before sharing.

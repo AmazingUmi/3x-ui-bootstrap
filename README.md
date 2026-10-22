@@ -1,30 +1,32 @@
 # 3X-UI Bootstrap
 
-面向 Ubuntu / Debian 的 3X-UI 一键部署工具。填写独立 JSON 配置，上传脚本与配置文件，即可部署 VLESS + REALITY 节点。
+English | [简体中文](README.zh-CN.md)
 
-支持 Direct、ISP、Direct + ISP 三种线路模式；域名可选，面板默认通过 SSH 隧道管理。安装完成后输出控制台账号、密码、完整 URL、Mihomo 订阅、Shadowrocket 订阅和 VLESS 链接。
+A one-command 3X-UI deployment tool for Ubuntu / Debian. Fill in a separate JSON configuration file, upload it with the installer, and deploy VLESS + REALITY nodes.
 
-## 当前能力
+Choose Direct, ISP, or Direct + ISP mode. A domain is optional, and panel management uses an SSH tunnel by default. After installation, the tool prints the panel username, password, full URL, Mihomo subscriptions, Shadowrocket subscriptions, and VLESS links.
 
-- Direct 使用 VPS 出口；ISP 使用指定的 SOCKS5 / HTTP 代理，先验证认证、HTTPS 转发和实际出口。
-- 每条线路使用独立客户端、UUID、REALITY 密钥和订阅 ID。
-- 自动申请、续期公网 IP 或域名 HTTPS 证书；域名模式可选开放 HTTPS 面板。
-- 使用面板原生客户端月配额，按原部署日重置；双线路固定分配 Direct = 总预算 − ISP 预留。
-- 校验官方发行包摘要，并验证正式入站的 REALITY / VLESS / Vision 认证、HTTPS 转发和出口。
+## Features
 
-固定版本：3x-ui **v3.10.2**、Xray-core **26.6.27**、Certbot **5.8.0**。Xray 固定版本用于保留已验证的 Shadowrocket 兼容性；升级前需要重新验收 Shadowrocket 和 Mihomo。
+- Direct uses the VPS public exit; ISP uses a specified SOCKS5 / HTTP upstream, with authentication, HTTPS forwarding, and exit-IP checks before deployment.
+- Each route has a separate client, UUID, REALITY key pair, and subscription ID.
+- Automatically obtain and renew trusted HTTPS certificates for a public IP or domain; optionally expose the panel over domain-based HTTPS.
+- Use native panel client quotas with a monthly reset tied to the original deployment date. In dual-route mode, Direct receives the total budget minus the ISP reservation.
+- Verify official release checksums, then test the deployed inbound's REALITY / VLESS / Vision authentication, HTTPS forwarding, and exit IP.
 
-## 1. 准备 VPS
+Pinned versions: 3x-ui **v3.10.2**, Xray-core **26.6.27**, and Certbot **5.8.0**. Xray is pinned to preserve verified Shadowrocket compatibility. Retest both Shadowrocket and Mihomo before upgrading.
 
-适用于新建、已绑定静态公网 IPv4 的 Ubuntu 22.04+ / Debian 12+ VPS，要求 systemd、Python 3.10+、amd64 或 arm64。
+## 1. Prepare the VPS
 
-准备好 SSH 登录方式和 sudo 权限。脚本只接管自身创建的安装；已有其他 3X-UI 部署时会停止。
+Use a fresh Ubuntu 22.04+ / Debian 12+ VPS with a static public IPv4, systemd, Python 3.10+, and an amd64 or arm64 CPU.
 
-部署前重点确认：**配置填对、域名解析生效、端口已开放**。
+Have SSH access and sudo privileges ready. The installer only manages deployments it created; it stops if it finds an existing, unrelated 3X-UI installation.
 
-## 2. 填写配置
+Before deployment, confirm **the configuration is correct, domain DNS has propagated if used, and the required ports are open**.
 
-在本机项目目录执行：
+## 2. Configure
+
+Run these commands in your local project directory:
 
 ~~~bash
 cp config.example.json config.json
@@ -32,45 +34,56 @@ chmod 600 config.json
 nano config.json
 ~~~
 
-至少替换 SERVER_IP 和 NODE_NAME。首次建议使用默认 direct 模式。配置格式为 JSON：端口和流量额度使用数字，PANEL_HTTPS 使用 true / false，未填写的 ISP_PORT 使用 null。
+The example groups settings in this order: VPS, route mode, ISP credentials, ISP options, domain, ports, quotas, and REALITY target.
 
-先执行本地校验，无需 sudo 或网络：
+| Category | What to fill in |
+| --- | --- |
+| Always required | `SERVER_IP`: the VPS static public IPv4 |
+| Required by mode | Set `ISP_HOST`, `ISP_PORT`, `ISP_USERNAME`, and `ISP_PASSWORD` when the mode includes ISP |
+| Required by option | Set `SUB_DOMAIN` when `PANEL_HTTPS=true`; set `ISP_MONTHLY_GB` when dual-route mode has a finite total budget |
+| Optional | Adjust the nickname, mode, ports, ISP protocol and expected exit, domain, email, quotas, and REALITY target as needed |
+
+**With the defaults—Direct, an SSH-only panel, and unlimited traffic—only `SERVER_IP` must be filled in.** `NODE_NAME` defaults to `MyNode`; give it your own nickname if desired. `NODE_MODE` defaults to `direct`.
+
+The file uses JSON: ports and quotas are numbers, `PANEL_HTTPS` is `true` / `false`, and an unset `ISP_PORT` is `null`.
+
+Validate locally without sudo or network access:
 
 ~~~bash
 bash ./install-3x-ui.sh --config ./config.json --validate-config
 ~~~
 
-完整字段、双线路及域名示例见 [配置说明](docs/configuration.md)。真实 config.json 已加入 Git 忽略规则；请只提交示例。
+See [Configuration](docs/configuration.md) for all fields and dual-route / domain examples. The private config.json is ignored by Git; commit only the example.
 
-## 3. 解析域名并开放端口
+## 3. Configure DNS and open ports
 
-SUB_DOMAIN 可留空，订阅使用 VPS 公网 IP 和可信 HTTPS 证书；此时面板通过 SSH 隧道访问。
+Leave SUB_DOMAIN empty to use the VPS public IP with a trusted HTTPS certificate for subscriptions. Panel management then uses an SSH tunnel.
 
-填写域名时，将 A 记录直接指向 SERVER_IP，关闭该记录的 CDN 代理，等待公共 DNS 解析一致。PANEL_HTTPS 为 true 时，面板与订阅共用该域名及证书。
+If using a domain, point its A record directly to SERVER_IP, disable CDN proxying for that record, and wait for public DNS resolvers to agree. With PANEL_HTTPS set to true, the panel and subscriptions share the domain and certificate.
 
-以下是默认端口，**云防火墙和服务器防火墙均需检查**。脚本只输出清单，不修改防火墙或 SSH 设置。
+These are the default ports. **Check both the cloud firewall and the server firewall.** The installer prints the required rules; it does not change firewall or SSH settings.
 
-| TCP 端口 | 用途 | 何时开放 |
+| TCP port | Purpose | When to allow it |
 | --- | --- | --- |
-| 实际 SSH 端口（常见为 22） | 登录、上传、SSH 隧道 | 始终保留 |
-| 80 | 证书申请与自动续期 | 始终需要 |
-| 443 | Direct 节点 | 模式包含 Direct |
-| 8443 | ISP 节点 | 模式包含 ISP |
-| 2096 | 公网 HTTPS 订阅 | 始终需要 |
-| 7777 | 公网 HTTPS 面板 | 仅 PANEL_HTTPS=true 时；建议限制管理来源 IP |
+| Actual SSH port, commonly 22 | Login, uploads, and SSH tunnels | Keep access available |
+| 80 | Certificate issuance and automatic renewal | Always required |
+| 443 | Direct node | When the mode includes Direct |
+| 8443 | ISP node | When the mode includes ISP |
+| 2096 | Public HTTPS subscriptions | Always required |
+| 7777 | Public HTTPS panel | Only when PANEL_HTTPS=true; preferably restrict it to your management IP |
 
-修改端口后以配置校验输出为准。默认 SSH 面板无需开放 7777。
+If you change ports, use the list printed by configuration validation. The default SSH-only panel does not require public access to 7777.
 
-## 4. 上传、登录和安装
+## 4. Upload, log in, and install
 
-在本机执行，将 YOUR_VPS_IP 和 ubuntu 替换成实际信息。命令使用现有 SSH 配置或代理中的密钥：
+Run locally, replacing YOUR_VPS_IP and ubuntu with your server details. These commands use your existing SSH configuration or keys loaded in the SSH agent:
 
 ~~~bash
 scp ./install-3x-ui.sh ./config.json ubuntu@YOUR_VPS_IP:~/
 ssh ubuntu@YOUR_VPS_IP
 ~~~
 
-登录 VPS 后执行：
+After logging in to the VPS:
 
 ~~~bash
 chmod 600 ~/config.json
@@ -78,51 +91,51 @@ sudo bash ~/install-3x-ui.sh --config ~/config.json --check
 sudo bash ~/install-3x-ui.sh --config ~/config.json --install
 ~~~
 
---check 会联网验证候选配置、ISP、DNS 和安装条件，但不安装软件或修改服务。安装失败后，保留状态，修复问题并使用同一配置重试。
+--check uses the network to validate the candidate configuration, ISP, DNS, and installation prerequisites. It does not install software or modify services. If installation fails, keep the saved state, fix the cause, and retry with the same configuration.
 
-## 5. 访问面板与导入订阅
+## 5. Open the panel and import subscriptions
 
-安装成功时，终端输出完整访问地址和订阅链接，也保存在 VPS 的 /var/lib/3x-ui-bootstrap/result.txt，仅 root 可读。
+On success, the terminal prints full panel and subscription URLs. Results are also saved on the VPS at /var/lib/3x-ui-bootstrap/result.txt, readable only by root.
 
-默认 SSH 面板需要在本机另外建立隧道；下面示例使用默认面板端口 7777：
+For the default SSH-only panel, open a separate tunnel from your local machine. This example uses the default panel port, 7777:
 
 ~~~bash
 ssh -N -o ExitOnForwardFailure=yes \
   -L 127.0.0.1:17777:127.0.0.1:7777 ubuntu@YOUR_VPS_IP
 ~~~
 
-保持该终端开启，再打开安装结果输出的 http://127.0.0.1:17777/ 后带随机路径的完整 URL。域名 HTTPS 面板直接使用安装结果中的 HTTPS URL。
+Keep that terminal running, then open the full URL from the installer output: http://127.0.0.1:17777/ followed by its random base path. For the domain-based HTTPS panel, use the printed HTTPS URL directly.
 
-将对应线路的订阅导入 Mihomo / Shadowrocket，验证网页访问和实际出口。服务端本机检查通过后，仍需完成客户端公网验收。
+Import the subscription for the desired route into Mihomo / Shadowrocket, then verify browsing and the actual exit IP. Server-side loopback checks must be followed by real client testing over the public network.
 
-## 维护命令
+## Maintenance commands
 
-在 VPS 上执行；使用配置的操作默认读取脚本同目录的 config.json，也可明确使用 --config 指定。
+Run these on the VPS. Operations that use a configuration file default to config.json beside the installer; use --config to select another file.
 
-| 操作 | 命令 | 配置来源 |
+| Operation | Command | Configuration source |
 | --- | --- | --- |
-| 显示账号和链接 | sudo bash ~/install-3x-ui.sh --show | 服务器保存的结果 |
-| 查询原生月流量 | sudo bash ~/install-3x-ui.sh --traffic-status | 服务器保存的部署 |
-| 临时 REALITY 诊断 | sudo bash ~/install-3x-ui.sh --diagnose | 服务器保存的部署 |
-| 修改域名、面板 HTTPS | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain | 配置中的域名、HTTPS、邮箱 |
-| 修改昵称、模式和 ISP | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes | 配置中的线路、ISP、配额 |
-| 修改月配额 | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic | 配置中的总预算、ISP 预留 |
-| 修复 REALITY 目标 | sudo bash ~/install-3x-ui.sh --repair-reality-target | 服务器保存的部署和修复记录 |
+| Show credentials and links | sudo bash ~/install-3x-ui.sh --show | Saved server results |
+| Show native monthly traffic | sudo bash ~/install-3x-ui.sh --traffic-status | Saved deployment |
+| Run temporary REALITY diagnostics | sudo bash ~/install-3x-ui.sh --diagnose | Saved deployment |
+| Change the domain and panel HTTPS | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain | Domain, HTTPS, and email settings in the file |
+| Change the nickname, mode, and ISP | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes | Route, ISP, and quota settings in the file |
+| Change monthly quotas | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic | Total budget and ISP reservation in the file |
+| Repair the REALITY target | sudo bash ~/install-3x-ui.sh --repair-reality-target | Saved deployment and repair records |
 
-配置文件是候选设置。面板内手工修改 ISP 后，不要用旧配置执行 --configure-nodes；先同步配置文件，避免覆盖当前账号。
+The file contains candidate settings. After manually changing the ISP in the panel, update your private file before running --configure-nodes so an old configuration does not overwrite the current credentials.
 
-排查说明见 [常见问题](docs/troubleshooting.md)。
+See [Troubleshooting](docs/troubleshooting.md) for diagnostics.
 
-## 开发与验证
+## Development and verification
 
 ~~~bash
 bash scripts/check.sh
 ~~~
 
-本地检查覆盖 Shell / Python 语法、配置边界、线路路由、配额和 CLI。CI 不部署 VPS，不使用真实 ISP 凭据；真实客户端与证书签发需要另行验收。贡献说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Local checks cover Shell / Python syntax, configuration boundaries, routing, quotas, and the CLI. CI does not deploy a VPS or use real ISP credentials; certificate issuance and actual client connectivity require separate acceptance tests. See [Contributing](CONTRIBUTING.md).
 
-## 项目状态
+## Project status
 
-当前为 0.1.0 初始化版本，由已经使用的一键脚本整理而来，新增独立配置及离线检查。项目仓库：[AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap)。许可证待项目所有者确定后补充。
+This is the initial 0.1.0 version, adapted from an installer already used for deployments, with a separate configuration file and offline validation. Repository: [AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap). A license will be added after the project owner selects one.
 
-依赖项目：[3x-ui](https://github.com/MHSanaei/3x-ui)、[Xray-core](https://github.com/XTLS/Xray-core)、[Certbot](https://github.com/certbot/certbot)。本项目不包含它们的发行二进制，安装时下载并校验固定版本。
+Dependencies: [3x-ui](https://github.com/MHSanaei/3x-ui), [Xray-core](https://github.com/XTLS/Xray-core), and [Certbot](https://github.com/certbot/certbot). Their release binaries are not bundled; the installer downloads and verifies pinned versions.

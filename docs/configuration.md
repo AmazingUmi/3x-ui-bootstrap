@@ -1,38 +1,101 @@
-# 配置说明
+# Configuration
 
-使用 --config FILE 指定 JSON 文件；默认读取脚本同目录的 config.json。配置文件只作为数据读取，不执行 Shell 内容，也不读取 BOOTSTRAP_* 环境变量作为配置。
+English | [简体中文](configuration.zh-CN.md)
 
-配置必须是 UTF-8 JSON 对象，大小不超过 64 KiB，权限为 600 或更严格。未知字段、重复字段、错误类型和非标准 JSON 数值会被拒绝。SERVER_IP 必填，其余字段有默认值，建议始终从完整示例开始修改。
+Use `--config FILE` to select a JSON file. By default, the installer reads `config.json` beside the script. Configuration is read as data: it is never executed as Shell code, and `BOOTSTRAP_*` environment variables are not accepted as configuration overrides.
 
-## 字段
+Use a UTF-8 JSON object no larger than 64 KiB, with file permissions of `600` or stricter. Unknown fields, duplicate fields, incorrect types, and nonstandard JSON numbers are rejected.
 
-| 字段 | 类型 / 默认值 | 说明 |
+## Required and optional settings at a glance
+
+| Category | Fields to fill in | Condition |
 | --- | --- | --- |
-| SERVER_IP | 字符串，必填 | VPS 静态公网 IPv4；不能保留占位符 |
-| NODE_NAME | 字符串，MyNode | 自定义昵称，1–64 字符，不能包含空白、路径分隔符、控制字符 |
-| NODE_MODE | 字符串，direct | direct、direct+isp、isp 三选一 |
-| NODE_PORT | 整数，443 | Direct 入站端口 |
-| ISP_NODE_PORT | 整数，8443 | ISP 入站端口 |
-| ISP_PROTOCOL | 字符串，socks5 | socks5 或 http |
-| ISP_HOST | 字符串，空 | 上游 IP / 域名，不带协议、端口或路径 |
-| ISP_PORT | 整数或 null，null | 上游端口，包含 ISP 的模式必须填写 |
-| ISP_USERNAME | 字符串，空 | ISP 账号，包含 ISP 的模式必须填写 |
-| ISP_PASSWORD | 字符串，空 | ISP 密码，包含 ISP 的模式必须填写 |
-| ISP_EXPECTED_IP | 字符串，空 | 可选预期出口公网 IPv4，填写后严格比较 |
-| PANEL_PORT | 整数，7777 | 面板端口，默认仅监听本机 |
-| SUB_PORT | 整数，2096 | 公网 HTTPS 订阅端口 |
-| SUB_DOMAIN | 字符串，空 | 自有域名；留空时使用 SERVER_IP |
-| PANEL_HTTPS | 布尔值，false | true 时必须有域名，开放公网 HTTPS 面板 |
-| TOTAL_MONTHLY_GB | 数字，0 | 受管客户端总月预算，单位 GiB；0 为不限 |
-| ISP_MONTHLY_GB | 数字，0 | ISP 月预留，单位 GiB；0 为不限 |
-| ACME_EMAIL | 字符串，空 | 可选证书联系邮箱 |
-| REALITY_HOST | 字符串，www.cloudflare.com | REALITY 目标和 SNI，无需拥有该域名 |
+| Always required | `SERVER_IP` | Every installation mode; replace it with the VPS static public IPv4 |
+| Required for ISP | `ISP_HOST`, `ISP_PORT`, `ISP_USERNAME`, `ISP_PASSWORD` | `NODE_MODE` is `isp` or `direct+isp` |
+| Required for a public HTTPS panel | `SUB_DOMAIN` | `PANEL_HTTPS=true`; it may stay empty for an SSH-only panel |
+| Required for a finite dual-route budget | `ISP_MONTHLY_GB` | `NODE_MODE="direct+isp"` and `TOTAL_MONTHLY_GB>0`; it must be greater than 0 and less than the total budget |
+| All other settings | Defaults are available | Adjust them as described below |
 
-端口范围为 1–65535，不能和实际 SSH 端口冲突。所选线路的端口、面板、订阅必须互不相同，80/TCP 留给证书签发与续期。流量额度为非负数，最多三位小数。
+**With the defaults—Direct, an SSH-only panel, and unlimited traffic—only `SERVER_IP` must be filled in.** `NODE_NAME` defaults to `MyNode`; a custom nickname is recommended. `NODE_MODE` defaults to `direct`.
 
-## Direct + ISP 示例
+The sections below follow the configuration template's order. JSON does not allow comments, so `config.example.json` and `config.json` separate groups with blank lines without adding extra fields.
 
-下面仅演示需修改的字段；把它们合并到 config.json。示例中的代理地址和凭据必须替换：
+## 1. VPS address: always required
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `SERVER_IP` | Required | String, no default | VPS static public IPv4; replace the `YOUR_VPS_IP` placeholder |
+
+## 2. Nickname and route mode: optional
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `NODE_NAME` | Optional; customization recommended | String, `"MyNode"` | A 1–64 character nickname without whitespace, path separators, or control characters |
+| `NODE_MODE` | Optional | String, `"direct"` | One of `direct`, `direct+isp`, or `isp` |
+
+`direct` uses only the VPS exit; `isp` uses only the ISP exit; `direct+isp` creates two separate routes.
+
+## 3. ISP upstream credentials: required by mode
+
+All four fields below are required when `NODE_MODE` includes ISP. In `direct` mode, keep the example's empty values; the installer will not connect to an ISP.
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `ISP_HOST` | Required when using ISP | String, `""` | Upstream IP / domain without a scheme, port, or path |
+| `ISP_PORT` | Required when using ISP | Integer or `null`; default `null` | Upstream proxy port; use an integer when set |
+| `ISP_USERNAME` | Required when using ISP | String, `""` | ISP authentication username |
+| `ISP_PASSWORD` | Required when using ISP | String, `""` | ISP authentication password |
+
+## 4. ISP protocol and exit checks: optional
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `ISP_PROTOCOL` | Optional | String, `"socks5"` | `socks5` or `http`, matching the provider's proxy protocol |
+| `ISP_EXPECTED_IP` | Optional | String, `""` | The exit public IPv4 supplied by your ISP provider; the actual ISP exit must match this value when set. Leave empty for dynamic or rotating exits |
+
+These fields are used only in modes that include ISP.
+
+Set `ISP_EXPECTED_IP` to the actual ISP exit IP. `ISP_HOST` is the proxy connection endpoint, which may differ from the exit. `SERVER_IP` is the VPS public IP and is the expected exit for Direct. ISP checks always require a different exit from the VPS IP to detect accidental Direct routing.
+
+## 5. Domain and panel access: optional
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `SUB_DOMAIN` | Optional; required for a public HTTPS panel | String, `""` | Your domain without a scheme, port, or path; subscriptions use the VPS public IP when empty |
+| `PANEL_HTTPS` | Optional | Boolean, `false` | Manage through an SSH tunnel by default; set to `true` for a domain-based HTTPS panel |
+| `ACME_EMAIL` | Optional | String, `""` | Certificate contact email |
+
+Without a domain, keep `SUB_DOMAIN=""` and `PANEL_HTTPS=false`. If a domain is provided, its A record must point directly to `SERVER_IP`. Setting a domain alone does not expose the panel publicly.
+
+## 6. Ports: optional, defaults are ready to use
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `NODE_PORT` | Optional | Integer, `443` | Direct inbound port, used only when the mode includes Direct |
+| `ISP_NODE_PORT` | Optional | Integer, `8443` | ISP inbound port, used only when the mode includes ISP |
+| `PANEL_PORT` | Optional | Integer, `7777` | Panel port; loopback-only by default. Allow it through the firewalls when enabling the public HTTPS panel |
+| `SUB_PORT` | Optional | Integer, `2096` | Public HTTPS subscription port; allow it through the firewalls |
+
+Ports must be integers from 1–65535 and must not conflict with the actual SSH port. Active node ports, the panel port, and the subscription port must be distinct. Reserve `80/TCP` for certificate issuance and renewal. `ISP_PORT` connects the VPS to the upstream proxy; `ISP_NODE_PORT` accepts client connections to the VPS.
+
+## 7. Monthly traffic quotas: optional
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `TOTAL_MONTHLY_GB` | Optional | Number, `0` | Total monthly budget for managed clients, in GiB; `0` means unlimited |
+| `ISP_MONTHLY_GB` | Optional; required for a finite dual-route budget | Number, `0` | ISP monthly reservation, in GiB; with a finite dual-route total, it must be greater than 0 and less than the total budget |
+
+Quotas are nonnegative numbers with up to three decimal places. Both default to `0`, leaving traffic unlimited. In `direct` mode, `ISP_MONTHLY_GB` must remain `0`. With a finite dual-route budget, Direct receives the total budget minus the ISP reservation.
+
+## 8. REALITY target: optional, usually keep the default
+
+| Field | Required? | Type / default | Description |
+| --- | --- | --- | --- |
+| `REALITY_HOST` | Optional | String, `"www.cloudflare.com"` | REALITY target and SNI, without a scheme, port, or path; you do not need to own this domain |
+
+## Direct + ISP example
+
+This snippet shows only the fields to change; merge them into config.json. Replace the example proxy address and credentials:
 
 ~~~json
 {
@@ -48,13 +111,13 @@
 }
 ~~~
 
-此配置给 Direct 分配 900 GiB，给 ISP 分配 100 GiB。使用面板原生客户端月配额，超额后由面板停用；重置日绑定原部署日期，面板时区零点重置，短月取最后一天。两条线路不相互借用剩余额度；客户端统计不等同于供应商整机账单。
+This allocates 900 GiB to Direct and 100 GiB to ISP. Native panel client quotas disable a client when its quota is exhausted. Resets follow the original deployment day at midnight in the panel's time zone; shorter months use their last day. Unused quota is not shared between routes. Client traffic accounting is distinct from the provider's whole-server billing.
 
-单独 ISP 模式只创建 ISP 线路。总预算与 ISP 额度同时有限时，取两者较小值。Direct 模式的 ISP_MONTHLY_GB 必须为 0。双线路设置有限总预算时，必须同时设置大于 0、低于总预算的 ISP 预留。
+ISP-only mode creates only the ISP route. If both the total budget and ISP quota are finite, the smaller limit applies. In Direct mode, ISP_MONTHLY_GB must be 0. A finite dual-route total requires an ISP reservation greater than 0 and below the total budget.
 
-ISP 方案支持认证的单个 SOCKS5 / HTTP 上游，当前验证 TCP 转发，ISP 线路 UDP 明确阻断；不会在上游失败时自动改走 Direct。上游账号、密码不写入客户端订阅。
+The ISP setup uses a single authenticated SOCKS5 / HTTP upstream. TCP forwarding is currently verified, ISP-route UDP is explicitly blocked, and upstream failure does not fall back to Direct. Upstream credentials are not included in client subscriptions.
 
-## 域名 HTTPS 示例
+## Domain HTTPS example
 
 ~~~json
 {
@@ -64,18 +127,18 @@ ISP 方案支持认证的单个 SOCKS5 / HTTP 上游，当前验证 TCP 转发�
 }
 ~~~
 
-A 记录必须直接指向 SERVER_IP。面板与订阅使用同一域名及证书，分别保留自己的端口和路径。仅填写 SUB_DOMAIN、保持 PANEL_HTTPS=false 时，域名只用于订阅，面板继续使用 SSH 隧道。
+The A record must point directly to SERVER_IP. The panel and subscriptions share a domain and certificate, with their own ports and paths. If only SUB_DOMAIN is set and PANEL_HTTPS remains false, the domain is used for subscriptions while panel management stays behind the SSH tunnel.
 
-## 密码与私有配置
+## Passwords and private configuration
 
-密码使用 JSON 字符串；双引号和反斜杠分别写成反斜杠加双引号、两个反斜杠。单引号、美元符号和反引号无需 Shell 转义，也不会作为命令执行。配置不支持注释。
+Passwords are JSON strings. Escape double quotes and backslashes according to JSON syntax. Single quotes, dollar signs, and backticks need no Shell escaping and are never executed as commands. JSON does not support comments.
 
-本机与 VPS 上均执行 chmod 600 config.json。不要把真实配置、安装状态、订阅 ID、VLESS 链接、私钥或 result.txt 提交到仓库。Git 忽略规则不能保护任意自定义文件名，提交前仍需检查暂存文件。
+Run chmod 600 config.json on both your local machine and the VPS. Do not commit real configurations, installation state, subscription IDs, VLESS links, private keys, or result.txt. Git ignore rules do not protect arbitrary custom filenames; inspect staged files before committing.
 
-## 已有部署
+## Existing deployments
 
-不需要配置文件的 --show、--traffic-status、--diagnose 和 --repair-reality-target 使用服务器保存的数据。
+--show, --traffic-status, --diagnose, and --repair-reality-target use saved server data and do not require a configuration file.
 
-显式修改操作按类别读取配置：--configure-domain 修改域名、面板 HTTPS 和证书邮箱；--configure-nodes 修改昵称、模式、ISP 入站端口、上游及配额；--configure-traffic 只修改配额。它们都要求配置中的 SERVER_IP 与当前部署一致。现有 Direct、面板、订阅端口不通过这些操作修改，需先评估迁移方案。
+Explicit changes read settings by category: --configure-domain changes the domain, panel HTTPS, and certificate email; --configure-nodes changes the nickname, mode, ISP inbound port, upstream, and quotas; --configure-traffic changes only quotas. All require SERVER_IP to match the current deployment. These operations do not change existing Direct, panel, or subscription ports; assess a migration plan first.
 
-从旧版脚本迁移时，将原脚本头部各项值填写到新 config.json，并把端口改成 JSON 整数、PANEL_HTTPS 改成 JSON 布尔值、无上限额度改成数字 0。状态目录和安装归属格式保持不变，但本次初始化没有在现有 VPS 上验证迁移。
+To migrate from the old script, copy its header settings into the new config.json. Use JSON integers for ports, a JSON Boolean for PANEL_HTTPS, and numeric 0 for unlimited quotas. The state directory and installation ownership format are preserved, but this initialization has not been migration-tested on an existing VPS.

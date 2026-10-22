@@ -1,11 +1,13 @@
-# 更新记录
+# Changelog
+
+English | [简体中文](CHANGELOG.zh-CN.md)
 
 ## 0.1.0 — 2026-10-22
 
-- 从既有 3X-UI 一键脚本初始化独立项目。
-- 用户配置改为 --config 指定的 JSON 文件，补充公开示例和敏感文件忽略规则。
-- 增加无需 root / 网络的 --validate-config、严格字段及类型校验。
-- 保留 3x-ui v3.10.2、Xray 26.6.27、Direct / ISP 路由、原生配额及原部署日重置逻辑。
-- 增加配置、使用、故障排查说明和离线测试 / CI。
+- Initialize a standalone project from the existing 3X-UI deployment script.
+- Move user settings into a JSON file selected with --config; add a public example and ignore rules for sensitive files.
+- Add --validate-config without root or network requirements, with strict field and type validation.
+- Preserve 3x-ui v3.10.2, Xray 26.6.27, Direct / ISP routing, native quotas, and monthly resets tied to the original deployment day.
+- Add configuration, usage, and troubleshooting documentation, plus offline tests / CI.
 
-本次配置入口重构尚未在真实 VPS 部署；历史部署结果不作为此版本的新验收记录。
+This configuration-entry refactor has not yet been deployed on a real VPS. Historical deployment results are not new acceptance evidence for this version.
