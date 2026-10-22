@@ -16,7 +16,7 @@ Checks do not request certificates, install software, connect to real ISP proxie
 
 - The installation entry point is install-3x-ui.sh. User settings come only from a separate JSON file. Preserve deployment by uploading just the script and configuration.
 - Do not add legacy configuration aliases or source Shell configuration files. Update the example, documentation, and boundary tests when adding a field.
-- Keep Xray pinned to 26.6.27. Upgrades require actual acceptance results from both clients.
+- Keep Xray pinned to 26.6.27. The historically verified Shadowrocket pair is 2.2.92 (3345) with Xray 26.6.27; other Shadowrocket / Xray combinations are unverified. Upgrades require actual acceptance results from both Shadowrocket and Mihomo.
 - Preserve ownership checks, resumable installation, existing client identities, traffic counters, and the original deployment day. Do not blindly overwrite manual panel changes.
 - ISP failure must not automatically fall back to Direct. Explain native client quotas separately from whole-server traffic billing.
 - Commit only example data. Check staged configurations, logs, accounts, subscriptions, and keys for private information.
@@ -25,4 +25,4 @@ Documentation defaults to English, with Simplified Chinese copies named *.zh-CN.
 
 ## Release preparation
 
-Before a formal release, the project owner must select a license and complete VPS acceptance testing for the new configuration entry point. Passing local checks does not establish successful deployment or client connectivity.
+This project uses the [MIT License](LICENSE). Before a formal release, complete VPS acceptance testing for the new configuration entry point. Passing local checks does not establish successful deployment or client connectivity.

@@ -16,6 +16,14 @@ Choose Direct, ISP, or Direct + ISP mode. A domain is optional, and panel manage
 
 Pinned versions: 3x-ui **v3.10.2**, Xray-core **26.6.27**, and Certbot **5.8.0**. Xray is pinned to preserve verified Shadowrocket compatibility. Retest both Shadowrocket and Mihomo before upgrading.
 
+## Verified Shadowrocket compatibility
+
+| Shadowrocket | Xray-core | Verification record |
+| --- | --- | --- |
+| **2.2.92 (3345)** | **26.6.27** | Earlier user-confirmed subscription import, web browsing, and expected exit-IP checks |
+
+This records feedback from earlier deployments. **Other Shadowrocket / Xray version combinations have not been verified by this project.** Retest before changing either version; keep the pinned core until a replacement combination has passed acceptance testing.
+
 ## 1. Prepare the VPS
 
 Use a fresh Ubuntu 22.04+ / Debian 12+ VPS with a static public IPv4, systemd, Python 3.10+, and an amd64 or arm64 CPU.
@@ -136,6 +144,10 @@ Local checks cover Shell / Python syntax, configuration boundaries, routing, quo
 
 ## Project status
 
-This is the initial 0.1.0 version, adapted from an installer already used for deployments, with a separate configuration file and offline validation. Repository: [AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap). A license will be added after the project owner selects one.
+This is the initial 0.1.0 version, adapted from an installer already used for deployments, with a separate configuration file and offline validation. Repository: [AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). Third-party projects retain their own licenses.
 
 Dependencies: [3x-ui](https://github.com/MHSanaei/3x-ui), [Xray-core](https://github.com/XTLS/Xray-core), and [Certbot](https://github.com/certbot/certbot). Their release binaries are not bundled; the installer downloads and verifies pinned versions.

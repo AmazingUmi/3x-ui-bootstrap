@@ -37,7 +37,9 @@ After manually changing bootstrap-isp in the panel, update the private configura
 
 ## Shadowrocket cannot connect
 
-Confirm that Xray remains pinned to 26.6.27. Check the UUID, Vision flow, REALITY public key, SNI, Short ID, client server address, and inbound port. The pinned version follows prior client acceptance tests; retest after changing the core or client version.
+The historically verified pair is **Shadowrocket 2.2.92 (3345) + Xray-core 26.6.27**, based on earlier user-confirmed subscription import, web browsing, and exit-IP checks. **Other Shadowrocket / Xray version combinations have not been verified by this project.**
+
+Confirm that Xray remains pinned to 26.6.27. Check the UUID, Vision flow, REALITY public key, SNI, Short ID, client server address, and inbound port. Retest after changing the core or client version.
 
 --diagnose uses a temporary loopback copy to test the REALITY handshake target. It does not reproduce the actual ISP outbound or prove that the public client path works.
 

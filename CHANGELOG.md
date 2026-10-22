@@ -2,6 +2,11 @@
 
 English | [简体中文](CHANGELOG.zh-CN.md)
 
+## Unreleased
+
+- Record the historically verified Shadowrocket 2.2.92 (3345) + Xray 26.6.27 combination and mark other Shadowrocket / Xray combinations as unverified.
+- Add the MIT License and update licensing information in both languages.
+
 ## 0.1.0 — 2026-10-22
 
 - Initialize a standalone project from the existing 3X-UI deployment script.

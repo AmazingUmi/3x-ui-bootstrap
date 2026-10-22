@@ -16,6 +16,14 @@
 
 固定版本：3x-ui **v3.10.2**、Xray-core **26.6.27**、Certbot **5.8.0**。Xray 固定版本用于保留已验证的 Shadowrocket 兼容性；升级前需要重新验收 Shadowrocket 和 Mihomo。
 
+## 已验证的 Shadowrocket 兼容组合
+
+| Shadowrocket | Xray-core | 验证记录 |
+| --- | --- | --- |
+| **2.2.92（3345）** | **26.6.27** | 历史用户实测：订阅导入、网页访问和预期出口 IP 检查通过 |
+
+此记录来自此前部署的用户反馈。**本项目尚未验证其他 Shadowrocket / Xray 版本组合。** 更换任一版本前需重新实测，新的组合通过验收前保持固定内核版本。
+
 ## 1. 准备 VPS
 
 适用于新建、已绑定静态公网 IPv4 的 Ubuntu 22.04+ / Debian 12+ VPS，要求 systemd、Python 3.10+、amd64 或 arm64。
@@ -136,6 +144,10 @@ bash scripts/check.sh
 
 ## 项目状态
 
-当前为 0.1.0 初始化版本，由已经使用的一键脚本整理而来，新增独立配置及离线检查。项目仓库：[AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap)。许可证待项目所有者确定后补充。
+当前为 0.1.0 初始化版本，由已经使用的一键脚本整理而来，新增独立配置及离线检查。项目仓库：[AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap)。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。第三方项目继续遵循各自的许可证。
 
 依赖项目：[3x-ui](https://github.com/MHSanaei/3x-ui)、[Xray-core](https://github.com/XTLS/Xray-core)、[Certbot](https://github.com/certbot/certbot)。本项目不包含它们的发行二进制，安装时下载并校验固定版本。

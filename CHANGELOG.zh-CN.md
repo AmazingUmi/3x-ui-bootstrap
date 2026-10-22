@@ -2,6 +2,11 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 未发布
+
+- 补充历史已验证的 Shadowrocket 2.2.92（3345）+ Xray 26.6.27 组合，明确其他 Shadowrocket / Xray 组合尚未验证。
+- 添加 MIT License，并同步更新中英文授权说明。
+
 ## 0.1.0 — 2026-10-22
 
 - 从既有 3X-UI 一键脚本初始化独立项目。

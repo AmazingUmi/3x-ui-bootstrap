@@ -37,7 +37,9 @@ sudo journalctl -u x-ui -n 80 --no-pager
 
 ## Shadowrocket 连接失败
 
-确认内核仍为固定的 26.6.27，核对 UUID、Vision flow、REALITY 公钥、SNI、Short ID、客户端连接地址和入站端口。项目固定版本基于既有客户端验收；更换内核或客户端后需要重新测试。
+历史已验证组合为 **Shadowrocket 2.2.92（3345）+ Xray-core 26.6.27**，依据此前用户对订阅导入、网页访问和出口 IP 检查的成功反馈。**本项目尚未验证其他 Shadowrocket / Xray 版本组合。**
+
+确认内核仍为固定的 26.6.27，核对 UUID、Vision flow、REALITY 公钥、SNI、Short ID、客户端连接地址和入站端口。更换内核或客户端后需要重新测试。
 
 --diagnose 使用临时回环副本检查 REALITY 握手目标；它不复现正式 ISP 出站，也不证明公网客户端路径可用。
 
