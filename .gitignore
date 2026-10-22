@@ -1,0 +1,29 @@
+# Private configuration. Only public examples belong in Git.
+config.json
+config.*.json
+!config.example.json
+configs/*.json
+!configs/*.example.json
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+state.json
+result.txt
+*-url.txt
+*vless*.txt
+*.log
+
+# Local development / generated files.
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+htmlcov/
+build/
+dist/
+.DS_Store
+.idea/
+.vscode/
