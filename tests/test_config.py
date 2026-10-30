@@ -82,8 +82,9 @@ class ConfigTests(unittest.TestCase):
             self.parse(dict(self.isp(), ISP_PASSWORD="fake\npassword"))
 
     def test_unknown_and_duplicate_fields_are_rejected(self):
-        with self.assertRaisesRegex(RuntimeError, "不支持的字段"):
-            self.parse(dict(self.data, CORE_VERSION="other"))
+        for unknown in ({"CORE_VERSION": "other"}, {"ISP_NODE_PORT": 8443}):
+            with self.subTest(unknown=unknown), self.assertRaisesRegex(RuntimeError, "不支持的字段"):
+                self.parse(dict(self.data, **unknown))
         with self.assertRaisesRegex(RuntimeError, "重复字段"):
             self.app.load_config_values(self.write(raw='{"SERVER_IP":"8.8.8.8","SERVER_IP":"1.1.1.1"}'))
 
@@ -107,8 +108,16 @@ class ConfigTests(unittest.TestCase):
                            ("NODE_PORT", 80), ("NODE_PORT", 7777), ("PANEL_PORT", 2096)):
             with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
                 self.parse(dict(self.data, **{key: value}))
-        with self.assertRaises(RuntimeError):
-            self.parse(dict(self.isp(), ISP_NODE_PORT=443))
+
+    def test_all_modes_use_one_public_node_port(self):
+        for mode in ("direct", "direct+isp", "isp"):
+            with self.subTest(mode=mode):
+                c = self.parse(dict(self.isp(), NODE_MODE=mode))
+                self.assertEqual(self.app.node_ports(c), [443])
+                self.assertNotIn("ISP_NODE_PORT", c)
+                instructions = self.app.firewall_instructions(c)
+                self.assertEqual(instructions.count("443/TCP"), 1)
+                self.assertNotIn("8443", instructions)
 
     def test_nickname_and_host_validation(self):
         for key, value in (("NODE_NAME", "two words"), ("NODE_NAME", "a/b"), ("NODE_NAME", ""),

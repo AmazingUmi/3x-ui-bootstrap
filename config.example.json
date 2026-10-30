@@ -17,7 +17,6 @@
   "ACME_EMAIL": "",
 
   "NODE_PORT": 443,
-  "ISP_NODE_PORT": 8443,
   "PANEL_PORT": 7777,
   "SUB_PORT": 2096,
 

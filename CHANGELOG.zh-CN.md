@@ -2,7 +2,12 @@
 
 [English](CHANGELOG.md) | 简体中文
 
-## 未发布
+## 0.2.0 — 未发布
+
+- Direct 和 ISP 改为共用一个 VLESS + REALITY 入站（默认 443），通过独立客户端 UUID 认证后按 `user` 规则分别选择出口。
+- 保留独立订阅 ID、节点名称与原生月配额；共享入站共用 REALITY 密钥，ISP UDP 继续阻断，ISP 失败不回退 Direct。
+- 所有模式统一使用一个 `NODE_PORT`，同步更新防火墙清单。
+- 新共享入站拓扑尚待真实 VPS / Shadowrocket / Mihomo 验收；保留固定的 Xray 26.6.27。
 
 - 补充历史已验证的 Shadowrocket 2.2.92（3345）+ Xray 26.6.27 组合，明确其他 Shadowrocket / Xray 组合尚未验证。
 - 添加 MIT License，并同步更新中英文授权说明。

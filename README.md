@@ -9,7 +9,8 @@ Choose Direct, ISP, or Direct + ISP mode. A domain is optional, and panel manage
 ## Features
 
 - Direct uses the VPS public exit; ISP uses a specified SOCKS5 / HTTP upstream, with authentication, HTTPS forwarding, and exit-IP checks before deployment.
-- Each route has a separate client, UUID, REALITY key pair, and subscription ID.
+- Direct and ISP share one VLESS + REALITY inbound (default `443/TCP`), with independent authenticated client UUIDs routed to the VPS or ISP exit.
+- Each route keeps a separate subscription ID and quota. Clients share the inbound's REALITY key pair and are named `<nickname>-Direct` and `<nickname>-ISP`.
 - Automatically obtain and renew trusted HTTPS certificates for a public IP or domain; optionally expose the panel over domain-based HTTPS.
 - Use native panel client quotas with a monthly reset tied to the original deployment date. In dual-route mode, Direct receives the total budget minus the ISP reservation.
 - Verify official release checksums, then test the deployed inbound's REALITY / VLESS / Vision authentication, HTTPS forwarding, and exit IP.
@@ -22,13 +23,13 @@ Pinned versions: 3x-ui **v3.10.2**, Xray-core **26.6.27**, and Certbot **5.8.0**
 | --- | --- | --- |
 | **2.2.92 (3345)** | **26.6.27** | Earlier user-confirmed subscription import, web browsing, and expected exit-IP checks |
 
-This records feedback from earlier deployments. **Other Shadowrocket / Xray version combinations have not been verified by this project.** Retest before changing either version; keep the pinned core until a replacement combination has passed acceptance testing.
+This records feedback from earlier dual-inbound deployments; it does not establish client acceptance of the 0.2.0 shared-inbound topology. **Other Shadowrocket / Xray version combinations have not been verified by this project.** Retest before changing either version; keep the pinned core until a replacement combination has passed acceptance testing.
 
 ## 1. Prepare the VPS
 
 Use a fresh Ubuntu 22.04+ / Debian 12+ VPS with a static public IPv4, systemd, Python 3.10+, and an amd64 or arm64 CPU.
 
-Have SSH access and sudo privileges ready. The installer only manages deployments it created; it stops if it finds an existing, unrelated 3X-UI installation.
+Have SSH access and sudo privileges ready. The following steps deploy the shared-inbound setup on a fresh VPS.
 
 Before deployment, confirm **the configuration is correct, domain DNS has propagated if used, and the required ports are open**.
 
@@ -75,12 +76,11 @@ These are the default ports. **Check both the cloud firewall and the server fire
 | --- | --- | --- |
 | Actual SSH port, commonly 22 | Login, uploads, and SSH tunnels | Keep access available |
 | 80 | Certificate issuance and automatic renewal | Always required |
-| 443 | Direct node | When the mode includes Direct |
-| 8443 | ISP node | When the mode includes ISP |
+| 443 | Shared node inbound (Direct / ISP) | All modes |
 | 2096 | Public HTTPS subscriptions | Always required |
 | 7777 | Public HTTPS panel | Only when PANEL_HTTPS=true; preferably restrict it to your management IP |
 
-If you change ports, use the list printed by configuration validation. The default SSH-only panel does not require public access to 7777.
+If you change ports, use the list printed by configuration validation. Direct and ISP both use `NODE_PORT`, so no separate ISP inbound port is required. Subscriptions and the panel keep their own ports. The default SSH-only panel does not require public access to 7777.
 
 ## 4. Upload, log in, and install
 
@@ -114,7 +114,7 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 Keep that terminal running, then open the full URL from the installer output: http://127.0.0.1:17777/ followed by its random base path. For the domain-based HTTPS panel, use the printed HTTPS URL directly.
 
-Import the subscription for the desired route into Mihomo / Shadowrocket, then verify browsing and the actual exit IP. Server-side loopback checks must be followed by real client testing over the public network.
+Dual-route mode prints separate subscriptions and VLESS links for `<nickname>-Direct` and `<nickname>-ISP`. Both connect to the same VPS port with different UUIDs. Import the corresponding subscriptions into Mihomo / Shadowrocket and check browsing and each exit: Direct should use the VPS IP, and ISP should use the provider's exit. Xray matches the authenticated client's server-side email using `user` routing rules; renaming a node in a client app does not change its exit. Server-side loopback checks must be followed by real client testing over the public network.
 
 ## Maintenance commands
 
@@ -144,7 +144,7 @@ Local checks cover Shell / Python syntax, configuration boundaries, routing, quo
 
 ## Project status
 
-This is the initial 0.1.0 version, adapted from an installer already used for deployments, with a separate configuration file and offline validation. Repository: [AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap).
+Version 0.2.0 shares one inbound between clients while retaining separate configuration and native client quotas. The new single-port topology still requires real VPS and client acceptance testing. Repository: [AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap).
 
 ## License
 

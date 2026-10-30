@@ -27,17 +27,25 @@ sudo journalctl -u x-ui -n 80 --no-pager
 
 Also check the cloud firewall. UFW inactive means UFW is not enabled; adding a UFW rule alone will not resolve a problem elsewhere on the connection path.
 
+## Checking shared-port Direct and ISP routes
+
+Both nodes should connect to the VPS at `NODE_PORT` (default `443`), using different UUIDs and subscription IDs. The panel should have one managed VLESS + REALITY inbound with clients named `<nickname>-Direct` and `<nickname>-ISP`. Routing matches both the inbound tag and the client email (`user`), selecting `direct` or `bootstrap-isp`. Do not remove the client conditions or route solely by the shared inbound tag.
+
+ISP UDP is blocked, and upstream failure does not fall back to Direct. Quotas are accounted for per client; exhausting one client does not stop the other from using the shared inbound. If only one route fails, check its quota, enabled status, UUID, and routing. Port 443 does not guarantee public reachability; test real connectivity and each exit separately.
+
 ## The ISP outbound test passes, but clients cannot connect
 
 Verify three layers separately: the upstream proxy works, authentication and forwarding through the actual inbound work, and the client can establish a TCP connection to the VPS.
 
 Server-side loopback success does not replace public client testing. Compare Wi-Fi and cellular connectivity, and capture packets for the relevant client connection if needed. A TCP port test does not validate VLESS authentication. On a desktop with TUN enabled, connection tests may themselves be proxied; confirm which path the test actually uses.
 
-After manually changing bootstrap-isp in the panel, update the private configuration, retain the inbound tag and routing to bootstrap-isp, then save and apply the panel settings. Do not start by reinstalling or running --configure-nodes with old parameters.
+After manually changing bootstrap-isp in the panel, update the private configuration, retain the inbound tag, client email, and user routing to bootstrap-isp, then save and apply the panel settings. Do not start by reinstalling or running --configure-nodes with old parameters.
 
 ## Shadowrocket cannot connect
 
 The historically verified pair is **Shadowrocket 2.2.92 (3345) + Xray-core 26.6.27**, based on earlier user-confirmed subscription import, web browsing, and exit-IP checks. **Other Shadowrocket / Xray version combinations have not been verified by this project.**
+
+The historical acceptance record used separate inbounds; the new shared-inbound topology still needs real-client acceptance.
 
 Confirm that Xray remains pinned to 26.6.27. Check the UUID, Vision flow, REALITY public key, SNI, Short ID, client server address, and inbound port. Retest after changing the core or client version.
 

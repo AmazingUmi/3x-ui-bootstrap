@@ -33,7 +33,9 @@ The sections below follow the configuration template's order. JSON does not allo
 | `NODE_NAME` | Optional; customization recommended | String, `"MyNode"` | A 1–64 character nickname without whitespace, path separators, or control characters |
 | `NODE_MODE` | Optional | String, `"direct"` | One of `direct`, `direct+isp`, or `isp` |
 
-`direct` uses only the VPS exit; `isp` uses only the ISP exit; `direct+isp` creates two separate routes.
+`direct` uses only the VPS exit; `isp` uses only the ISP exit; `direct+isp` creates two clients in one VLESS + REALITY inbound. Every mode uses `NODE_PORT` (default `443`).
+
+The clients are named `<nickname>-Direct` and `<nickname>-ISP`, with independent UUIDs and subscription IDs. They share the inbound's REALITY key pair. Xray authenticates each UUID, then matches its server-side client email using routing `user` rules: Direct goes to `direct`, and ISP goes to `bootstrap-isp`. Renaming a node in a client app does not select a different exit.
 
 ## 3. ISP upstream credentials: required by mode
 
@@ -71,12 +73,11 @@ Without a domain, keep `SUB_DOMAIN=""` and `PANEL_HTTPS=false`. If a domain is p
 
 | Field | Required? | Type / default | Description |
 | --- | --- | --- | --- |
-| `NODE_PORT` | Optional | Integer, `443` | Direct inbound port, used only when the mode includes Direct |
-| `ISP_NODE_PORT` | Optional | Integer, `8443` | ISP inbound port, used only when the mode includes ISP |
+| `NODE_PORT` | Optional | Integer, `443` | Shared VLESS + REALITY inbound port for all active clients, including ISP-only mode |
 | `PANEL_PORT` | Optional | Integer, `7777` | Panel port; loopback-only by default. Allow it through the firewalls when enabling the public HTTPS panel |
 | `SUB_PORT` | Optional | Integer, `2096` | Public HTTPS subscription port; allow it through the firewalls |
 
-Ports must be integers from 1–65535 and must not conflict with the actual SSH port. Active node ports, the panel port, and the subscription port must be distinct. Reserve `80/TCP` for certificate issuance and renewal. `ISP_PORT` connects the VPS to the upstream proxy; `ISP_NODE_PORT` accepts client connections to the VPS.
+Ports must be integers from 1–65535 and must not conflict with the actual SSH port. The shared node port, the panel port, and the subscription port must be distinct. Reserve `80/TCP` for certificate issuance and renewal. `ISP_PORT` connects the VPS to the upstream proxy; `NODE_PORT` accepts both Direct and ISP client connections to the VPS. No separate ISP inbound firewall rule is needed.
 
 ## 7. Monthly traffic quotas: optional
 
@@ -101,6 +102,7 @@ This snippet shows only the fields to change; merge them into config.json. Repla
 {
   "NODE_NAME": "MyNode",
   "NODE_MODE": "direct+isp",
+  "NODE_PORT": 443,
   "ISP_PROTOCOL": "socks5",
   "ISP_HOST": "proxy.example.com",
   "ISP_PORT": 1080,
@@ -111,11 +113,11 @@ This snippet shows only the fields to change; merge them into config.json. Repla
 }
 ~~~
 
-This allocates 900 GiB to Direct and 100 GiB to ISP. Native panel client quotas disable a client when its quota is exhausted. Resets follow the original deployment day at midnight in the panel's time zone; shorter months use their last day. Unused quota is not shared between routes. Client traffic accounting is distinct from the provider's whole-server billing.
+This allocates 900 GiB to Direct and 100 GiB to ISP. Native panel client quotas disable only the exhausted client; the other client keeps using the shared inbound. Resets follow the original deployment day at midnight in the panel's time zone; shorter months use their last day. Unused quota is not shared between routes. Client traffic accounting is distinct from the provider's whole-server billing.
 
 ISP-only mode creates only the ISP route. If both the total budget and ISP quota are finite, the smaller limit applies. In Direct mode, ISP_MONTHLY_GB must be 0. A finite dual-route total requires an ISP reservation greater than 0 and below the total budget.
 
-The ISP setup uses a single authenticated SOCKS5 / HTTP upstream. TCP forwarding is currently verified, ISP-route UDP is explicitly blocked, and upstream failure does not fall back to Direct. Upstream credentials are not included in client subscriptions.
+The ISP setup uses a single authenticated SOCKS5 / HTTP upstream. TCP forwarding is supported, ISP-route UDP is explicitly blocked, and upstream failure does not fall back to Direct. Upstream credentials are not included in client subscriptions.
 
 ## Domain HTTPS example
 
@@ -135,10 +137,12 @@ Passwords are JSON strings. Escape double quotes and backslashes according to JS
 
 Run chmod 600 config.json on both your local machine and the VPS. Do not commit real configurations, installation state, subscription IDs, VLESS links, private keys, or result.txt. Git ignore rules do not protect arbitrary custom filenames; inspect staged files before committing.
 
-## Existing deployments
+## Maintenance and deployment scope
 
 --show, --traffic-status, --diagnose, and --repair-reality-target use saved server data and do not require a configuration file.
 
-Explicit changes read settings by category: --configure-domain changes the domain, panel HTTPS, and certificate email; --configure-nodes changes the nickname, mode, ISP inbound port, upstream, and quotas; --configure-traffic changes only quotas. All require SERVER_IP to match the current deployment. These operations do not change existing Direct, panel, or subscription ports; assess a migration plan first.
+Explicit changes read settings by category: --configure-domain changes the domain, panel HTTPS, and certificate email; --configure-nodes changes the nickname, mode, upstream, and quotas; --configure-traffic changes only quotas. All require SERVER_IP to match the current deployment. These operations do not change the shared node, panel, or subscription ports.
 
-To migrate from the old script, copy its header settings into the new config.json. Use JSON integers for ports, a JSON Boolean for PANEL_HTTPS, and numeric 0 for unlimited quotas. The state directory and installation ownership format are preserved, but this initialization has not been migration-tested on an existing VPS.
+For a fresh VPS deployment, create a private configuration from `config.example.json` and follow the installation steps.
+
+The historical compatibility record is **Shadowrocket 2.2.92 (3345) + Xray-core 26.6.27**. It does not verify other version combinations or the new shared-inbound topology. After deployment, test both subscriptions in real clients and check each exit IP.

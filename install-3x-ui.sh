@@ -42,7 +42,7 @@ if sys.version_info < (3, 10):
     raise SystemExit("需要 Python 3.10+；服务器请使用 Ubuntu 22.04+ 或 Debian 12+。")
 from zoneinfo import ZoneInfo
 
-PROJECT_VERSION = "0.1.0"
+PROJECT_VERSION = "0.2.0"
 MODE = "--install"
 INPUT_CONFIG = None
 
@@ -82,10 +82,10 @@ def require(ok, message):
 
 
 # Public configuration is data, never shell code. Values are normalized at this
-# boundary so the tested deployment/state format remains unchanged.
+# boundary before deployment checks or service changes.
 CONFIG_DEFAULTS = {
     "NODE_NAME": "MyNode", "NODE_MODE": "direct", "NODE_PORT": 443,
-    "ISP_NODE_PORT": 8443, "ISP_PROTOCOL": "socks5", "ISP_HOST": "",
+    "ISP_PROTOCOL": "socks5", "ISP_HOST": "",
     "ISP_PORT": None, "ISP_USERNAME": "", "ISP_PASSWORD": "", "ISP_EXPECTED_IP": "",
     "PANEL_PORT": 7777, "SUB_PORT": 2096, "SUB_DOMAIN": "", "PANEL_HTTPS": False,
     "TOTAL_MONTHLY_GB": 0, "ISP_MONTHLY_GB": 0, "ACME_EMAIL": "",
@@ -137,7 +137,7 @@ def load_config_values(path):
         if key == "PANEL_HTTPS":
             require(type(value) is bool, "PANEL_HTTPS 必须是 JSON 布尔值 true 或 false。")
             values[key] = "true" if value else "false"
-        elif key in ("NODE_PORT", "ISP_NODE_PORT", "PANEL_PORT", "SUB_PORT", "ISP_PORT"):
+        elif key in ("NODE_PORT", "PANEL_PORT", "SUB_PORT", "ISP_PORT"):
             if key == "ISP_PORT" and value is None:
                 values[key] = ""
                 continue
@@ -167,7 +167,6 @@ def config_from_file():
 def parse_config(values):
     c = dict(values)
     c.setdefault("NODE_MODE", "direct")
-    c.setdefault("ISP_NODE_PORT", "8443")
     require(c["NODE_MODE"] in ("direct", "direct+isp", "isp"),
             "NODE_MODE 只能填写 direct、direct+isp 或 isp。")
     budget = parse_traffic_budget(c, {key: c.pop(key, "0") for key in ("TOTAL_MONTHLY_GB", "ISP_MONTHLY_GB")})
@@ -220,7 +219,7 @@ def parse_config(values):
         raise RuntimeError("SERVER_IP 必须是公网 IPv4，请替换示例占位符。") from None
     require(ip.version == 4 and ip.is_global and not ip.is_multicast,
             "SERVER_IP 必须是公网 IPv4。")
-    for key in ("NODE_PORT", "ISP_NODE_PORT", "PANEL_PORT", "SUB_PORT"):
+    for key in ("NODE_PORT", "PANEL_PORT", "SUB_PORT"):
         c[key] = str(c[key])
         require(re.fullmatch(r"[1-9][0-9]{0,4}", c[key]) is not None,
                 key + " 必须是 1–65535 的整数。")
@@ -324,12 +323,11 @@ def native_quota_fields(c, role, state):
 
 
 def node_ports(c):
-    return [c["NODE_PORT"] if role == "direct" else c["ISP_NODE_PORT"] for role in active_roles(c)]
+    return [c["NODE_PORT"]]
 
 
 def node_view(c, state, role):
-    nc = dict(c, NODE_PORT=c["NODE_PORT"] if role == "direct" else c["ISP_NODE_PORT"],
-              NODE_NAME=c["NODE_NAME"] + ("-Direct" if role == "direct" else "-ISP"), ROLE=role)
+    nc = dict(c, NODE_NAME=c["NODE_NAME"] + ("-Direct" if role == "direct" else "-ISP"), ROLE=role)
     ns = dict(state)
     if "nodes" in state:
         require(role in state["nodes"], "安装记录缺少所选线路，请使用 --configure-nodes 配置。")
@@ -348,21 +346,22 @@ def prepare_nodes(c, state):
         state["nodes"] = {primary: {k: state[k] for k in IDENTITY_KEYS if k in state}}
     for role in active_roles(c):
         if role not in state["nodes"]:
-            state["nodes"][role] = {"uuid": str(uuid.uuid4()), "short_id": secrets.token_hex(8),
+            state["nodes"][role] = {"uuid": str(uuid.uuid4()), "short_id": state["short_id"],
                                     "sub_id": secrets.token_hex(8)}
 
 
 def ensure_node_keys(api, c, state):
-    for role in active_roles(c):
-        node = state["nodes"][role]
-        if not node.get("private_key"):
-            pair = api.call("server/getNewX25519Cert")
-            require(isinstance(pair, dict) and all(re.fullmatch(r"[A-Za-z0-9_-]{43}", pair.get(k, ""))
-                    for k in ("privateKey", "publicKey")), "REALITY 密钥生成结果异常。")
-            node.update(private_key=pair["privateKey"], public_key=pair["publicKey"])
-            if node["uuid"] == state["uuid"]:
-                state.update(private_key=node["private_key"], public_key=node["public_key"])
-            save(state)
+    # REALITY belongs to the shared inbound, while UUID and Sub ID belong to clients.
+    if not state.get("private_key"):
+        pair = api.call("server/getNewX25519Cert")
+        require(isinstance(pair, dict) and all(re.fullmatch(r"[A-Za-z0-9_-]{43}", pair.get(k, ""))
+                for k in ("privateKey", "publicKey")), "REALITY 密钥生成结果异常。")
+        state.update(private_key=pair["privateKey"], public_key=pair["publicKey"])
+    for node in state["nodes"].values():
+        for key in ("private_key", "public_key", "short_id"):
+            require(key not in node or node[key] == state[key], "共享入站的 REALITY 身份不一致，停止配置。")
+            node[key] = state[key]
+    save(state)
 
 
 def atomic_write(path, text):
@@ -453,8 +452,7 @@ def check_target(c):
 
 def firewall_instructions(c):
     lines = ["端口放行（云防火墙与服务器防火墙均需手动配置）："]
-    for role, port in zip(active_roles(c), node_ports(c)):
-        lines.append("  " + ("Direct" if role == "direct" else "ISP") + " 节点：" + str(port) + "/TCP")
+    lines.append("  节点共享入站（" + "/".join(active_roles(c)) + "）：" + str(c["NODE_PORT"]) + "/TCP")
     lines.append("  订阅：" + str(c["SUB_PORT"]) + "/TCP")
     if c.get("PANEL_HTTPS"):
         lines.append("  域名 HTTPS 面板：" + str(c["PANEL_PORT"]) + "/TCP（允许管理设备来源 IP）")
@@ -717,7 +715,7 @@ def initial_settings(c, state):
             "subPort": str(c["SUB_PORT"]), "subClashEnable": "true", "subClashPath": "/mihomo/",
             "subDomain": c["SUB_HOST"], "subCertFile": c["CERT_FILE"], "subKeyFile": c["CERT_KEY"]}
     if "NODE_MODE" in c:
-        settings.update(remarkTemplate="{{INBOUND}}", subPath=state.get("raw_sub_path", "/sub/"), subEncrypt="true")
+        settings.update(remarkTemplate="{{EMAIL}}", subPath=state.get("raw_sub_path", "/sub/"), subEncrypt="true")
     return settings
 
 
@@ -830,12 +828,15 @@ def contains(actual, expected):
     return actual == expected
 
 
+def client_payload(c, state, role):
+    nc, ns = node_view(c, state, role)
+    return {"id": ns["uuid"], "flow": "xtls-rprx-vision", "email": nc["NODE_NAME"],
+            "limitIp": 0, "expiryTime": 0, "enable": True, "tgId": 0,
+            "subId": ns["sub_id"], "reset": 0, **native_quota_fields(c, role, state)}
+
+
 def inbound_payload(c, state):
-    client = {"id": state["uuid"], "flow": "xtls-rprx-vision", "email": c["NODE_NAME"] if c.get("ROLE") else "client-01",
-              "limitIp": 0, "totalGB": 0, "expiryTime": 0, "enable": True,
-              "tgId": 0, "subId": state["sub_id"], "reset": 0}
-    if "TRAFFIC_BUDGET" in c:
-        client.update(native_quota_fields(c, c.get("ROLE", "direct"), state))
+    clients = [client_payload(c, state, role) for role in active_roles(c)]
     reality = {"show": False, "xver": 0, "target": c["REALITY_HOST"] + ":443",
                "serverNames": [c["REALITY_HOST"]], "privateKey": state["private_key"],
                "shortIds": [state["short_id"]], "minClientVer": "", "maxClientVer": "", "maxTimediff": 0,
@@ -844,7 +845,7 @@ def inbound_payload(c, state):
     return {"enable": True, "remark": c["NODE_NAME"], "listen": "0.0.0.0", "port": c["NODE_PORT"],
             "shareAddrStrategy": "custom", "shareAddr": c["SERVER_IP"],
             "protocol": "vless", "expiryTime": 0, "total": 0,
-            "settings": json.dumps({"clients": [client], "decryption": "none", "fallbacks": []}),
+            "settings": json.dumps({"clients": clients, "decryption": "none", "fallbacks": []}),
             "streamSettings": json.dumps({"network": "tcp", "security": "reality",
                 "tcpSettings": {"header": {"type": "none"}}, "realitySettings": reality}),
             "sniffing": json.dumps({"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": False})}
@@ -853,52 +854,61 @@ def inbound_payload(c, state):
 def ensure_inbound(api, c, state, allow_create=True):
     rows = api.call("inbounds/list")
     require(isinstance(rows, list), "面板未返回节点列表。")
-    matches = [r for r in rows if any(x.get("id") == state["uuid"]
-               for x in object_field(r, "settings").get("clients", []))]
+    identities = {node["uuid"] for node in state["nodes"].values()}
+    def matches_for(items):
+        return [r for r in items if any(x.get("id") in identities
+                for x in object_field(r, "settings").get("clients", []))]
+    matches = matches_for(rows)
+    expected = inbound_payload(c, state)
     if not matches:
-        require(allow_create, "原节点或首个客户端已删除；脚本不会在已完成的安装中重建。")
+        require(allow_create, "原共享入站或客户端已删除；不会在已完成的安装中重建。")
         require(not any(r.get("port") == c["NODE_PORT"] for r in rows),
                 "该端口已有其他节点；停止，避免覆盖或重复创建。")
-        if c.get("ROLE"):
-            require(not any(str(v.get("email", "")).casefold() == c["NODE_NAME"].casefold()
-                    for r in rows for v in object_field(r, "settings").get("clients", [])),
-                    "客户端名称已被其他入站使用。")
-        api.call("inbounds/add", inbound_payload(c, state))
-        rows = api.call("inbounds/list")
-        matches = [r for r in rows if any(x.get("id") == state["uuid"]
-                   for x in object_field(r, "settings").get("clients", []))]
-    require(len(matches) == 1, "节点创建后未能唯一读回；请检查面板，勿重复手动添加。")
+        names = {x["email"].casefold() for x in object_field(expected, "settings")["clients"]}
+        require(not any(str(v.get("email", "")).casefold() in names
+                for r in rows for v in object_field(r, "settings").get("clients", [])),
+                "客户端名称已被其他入站使用。")
+        api.call("inbounds/add", expected)
+        matches = matches_for(api.call("inbounds/list"))
+    require(len(matches) == 1, "受管客户端必须唯一属于同一个共享入站。")
     row = matches[0]
-    expected = inbound_payload(c, state)
     require(all(row.get(k) == expected[k] for k in
-                ("port", "protocol", "listen", "enable", "shareAddrStrategy", "shareAddr")),
-            "已存在节点的关键设置发生变化；停止自动安装。")
+                ("port", "protocol", "listen", "enable", "remark", "shareAddrStrategy", "shareAddr", "expiryTime", "total")),
+            "已存在共享入站的关键设置发生变化；停止自动安装。")
     for field in ("settings", "streamSettings"):
         actual, wanted = object_field(row, field), object_field(expected, field)
         require(contains(actual, {k: v for k, v in wanted.items() if k != "clients"}),
                 "已存在节点的协议设置发生变化：" + field)
     clients = object_field(row, "settings").get("clients", [])
-    client = next(x for x in clients if x.get("id") == state["uuid"])
-    exhausted = False
-    if "TRAFFIC_BUDGET" in c:
-        detail = api.call("clients/get/" + urllib.parse.quote(client["email"], safe=""))
-        record = detail.get("client", {})
-        cap = client_quota(c, c.get("ROLE", "direct"))
-        require(record.get("uuid") == state["uuid"] and type(detail.get("usedTraffic")) is int
-                and detail["usedTraffic"] >= 0 and contains(record, native_quota_fields(c, c.get("ROLE", "direct"), state)),
-                "客户端原生月配额已变化；请使用 --configure-traffic。")
-        exhausted = bool(cap and detail.get("usedTraffic", 0) >= cap)
-    require((client.get("enable") is True or exhausted) and client.get("flow") == "xtls-rprx-vision",
-            "首个客户端已禁用或 flow 被修改。")
-    if c.get("ROLE") and "NODE_MODE" in c:
-        require(row.get("remark") == c["NODE_NAME"] and client.get("email") == c["NODE_NAME"]
-                and client.get("subId") == state["sub_id"], "线路或客户端名称、订阅标识已变化；请使用 --configure-nodes。")
+    ids = [x.get("id") for x in clients]
+    require(len(ids) == len(set(ids)) and set(ids).issubset(identities),
+            "共享入站存在重复或非受管客户端，停止自动配置。")
+    active_ids = {state["nodes"][role]["uuid"] for role in active_roles(c)}
+    require(active_ids.issubset(ids), "共享入站缺少所选客户端；请检查面板，勿重复添加。")
+    require(all(x.get("enable") is False and x.get("trafficReset", "never") == "never"
+                for x in clients if x["id"] not in active_ids), "已停用线路的客户端仍启用或存在自动重置。")
+    for role in active_roles(c):
+        nc, ns = node_view(c, state, role)
+        client = next(x for x in clients if x["id"] == ns["uuid"])
+        require(client.get("email") == nc["NODE_NAME"] and client.get("subId") == ns["sub_id"],
+                "客户端名称或订阅标识已变化；请使用 --configure-nodes。")
+        exhausted = False
+        if "TRAFFIC_BUDGET" in c:
+            detail = api.call("clients/get/" + urllib.parse.quote(client["email"], safe=""))
+            record = detail.get("client", {})
+            cap = client_quota(c, role)
+            require(record.get("uuid") == ns["uuid"] and type(detail.get("usedTraffic")) is int
+                    and detail["usedTraffic"] >= 0 and contains(record, native_quota_fields(c, role, state)),
+                    "客户端原生月配额已变化；请使用 --configure-traffic。")
+            exhausted = bool(cap and detail["usedTraffic"] >= cap)
+        require((client.get("enable") is True or exhausted) and client.get("flow") == "xtls-rprx-vision",
+                "受管客户端已禁用或 flow 被修改。")
     return row
 
 
 def ensure_inbounds(api, c, state, allow_create=True):
-    return {role: ensure_inbound(api, *node_view(c, state, role), allow_create=allow_create)
-            for role in active_roles(c)}
+    row = ensure_inbound(api, c, state, allow_create=allow_create)
+    return {role: row for role in active_roles(c)}
 
 
 def native_clients(api, c, state):
@@ -1059,37 +1069,52 @@ def read_routing(api):
 
 
 def route_rules(c, rows):
+    tags = {rows[role].get("tag") for role in active_roles(c)}
+    require(len(tags) == 1 and all(isinstance(tag, str) and tag for tag in tags),
+            "所选客户端必须共用一个真实入站标签。")
+    tag = next(iter(tags))
     rules = []
     for role in active_roles(c):
-        require(isinstance(rows[role].get("tag"), str) and rows[role]["tag"], "未读回真实入站标签。")
-        tag = rows[role]["tag"]
+        email = c["NODE_NAME"] + ("-Direct" if role == "direct" else "-ISP")
+        match = {"type": "field", "inboundTag": [tag], "user": [email]}
         if role == "isp":
-            rules.append({"type": "field", "inboundTag": [tag], "network": "udp", "outboundTag": "blocked"})
-        rule = {"type": "field", "inboundTag": [tag], "outboundTag": "direct" if role == "direct" else "bootstrap-isp"}
-        if role == "isp":
-            rule["network"] = "tcp"
-        rules.append(rule)
+            rules.append(dict(match, network="udp", outboundTag="blocked"))
+            rules.append(dict(match, network="tcp", outboundTag="bootstrap-isp"))
+        else:
+            rules.append(dict(match, outboundTag="direct"))
+    # Unconfigured users must not fall through to Xray's first outbound.
+    rules.append({"type": "field", "inboundTag": [tag], "outboundTag": "blocked"})
     return rules
 
 
 def routing_matches(template, c, rows):
     outbounds = template["outbounds"]
-    require(any(o.get("tag") == "direct" and o.get("protocol") == "freedom" for o in outbounds)
-            and any(o.get("tag") == "blocked" and o.get("protocol") == "blackhole" for o in outbounds),
-            "Xray 的 direct 或 blocked 基础出站已变化。")
+    for tag, protocol in (("direct", "freedom"), ("blocked", "blackhole")):
+        matches = [o for o in outbounds if o.get("tag") == tag]
+        require(len(matches) == 1 and matches[0].get("protocol") == protocol,
+                "Xray 的 direct 或 blocked 基础出站已变化。")
     if "isp" in active_roles(c):
         require([o for o in outbounds if o.get("tag") == "bootstrap-isp"] == [isp_outbound(c)],
                 "ISP 出站与保存的配置不一致；脚本不会悄悄覆盖。")
     rules = template["routing"]["rules"]
-    for expected in route_rules(c, rows):
-        require(sum(r == expected for r in rules) == 1, "所选线路的路由缺失、重复或已变化。")
+    expected_rules = route_rules(c, rows)
+    indices = []
+    for expected in expected_rules:
+        require(sum(r == expected for r in rules) == 1, "所选客户端的路由缺失、重复或已变化。")
         index = rules.index(expected)
+        indices.append(index)
         for earlier in rules[:index]:
-            if earlier in route_rules(c, rows) or earlier.get("outboundTag") in ("api", "blocked"):
+            if earlier in expected_rules:
                 continue
             tags = earlier.get("inboundTag")
-            require(tags and not set(tags).intersection(expected["inboundTag"]),
-                    "已有路由可能覆盖线路出口，请先检查路由优先级。")
+            if tags and not set(tags).intersection(expected["inboundTag"]):
+                continue
+            # Retain global blocking policies (for example private IP / BitTorrent).
+            # Inbound-specific rules and a global catch-all would shadow user routing.
+            require(not tags and earlier.get("outboundTag") == "blocked"
+                    and any(earlier.get(k) for k in ("ip", "domain", "protocol", "port")),
+                    "已有路由可能覆盖客户端出口，请先检查路由优先级。")
+    require(indices == sorted(indices), "客户端路由顺序错误，兜底阻断必须在客户端规则之后。")
 
 
 def ensure_routing(api, c, state, rows, allow_update=False):
@@ -1224,7 +1249,7 @@ def verify_shadowrocket(c, state):
 
 def listener_summary(c, rows):
     parts = []
-    services = [("面板", c["PANEL_PORT"]), ("订阅", c["SUB_PORT"])] + list(zip(active_roles(c), node_ports(c)))
+    services = [("面板", c["PANEL_PORT"]), ("订阅", c["SUB_PORT"]), ("共享节点", c["NODE_PORT"])]
     for label, service_port in services:
         found = []
         for address, port, line in rows:
@@ -1383,7 +1408,7 @@ def verify_runtime(c, state, arch):
         require(state.get("traffic_reset", {}).get("timezone") == panel_timezone(), "面板时区已变化；请先恢复原月配额时区。")
         verify_native_metering(API(c, state))
     exhausted = native_exhausted(c, state)
-    expected_ports = {node_view(c, state, role)[0]["NODE_PORT"] for role in active_roles(c) if role not in exhausted}
+    expected_ports = {c["NODE_PORT"]}  # Disabling one client must never disable the shared listener.
     for _ in range(30):
         rows = sockets()
         panel = [r for r in rows if r[1] == c["PANEL_PORT"]]
@@ -1454,7 +1479,7 @@ def write_results(c, state):
             atomic_write(STATE_DIR / "mihomo-url.txt", sub_link + "\n")
     result += ("3X-UI：" + VERSION + "\n"
         "Xray-core：" + CORE_VERSION + "（Shadowrocket 兼容固定版本）\n"
-        "线路模式：" + c.get("NODE_MODE", "direct") + "\n"
+        "线路模式：" + c.get("NODE_MODE", "direct") + "（共享 " + str(c["NODE_PORT"]) + "/TCP，按客户端分流）\n"
         "REALITY 目标 / SNI：" + c["REALITY_HOST"] + "\n"
         "面板监听：" + ("0.0.0.0:" if public_panel else "127.0.0.1:") + str(c["PANEL_PORT"]) +
         ("（域名 HTTPS）\n" if public_panel else "（SSH 隧道）\n") +
@@ -1521,7 +1546,7 @@ def repair_reality_target(c, state, arch):
         require(probe_reality_target(nc, ns, arch, "www.cloudflare.com"),
                 "Cloudflare 临时副本未通过；未修改正式节点。")
         entries = []
-        for role, row in rows.items():
+        for role, row in list(rows.items())[:1]:  # One shared transport to update.
             _, ns = node_view(c, state, role)
             old_stream = object_field(row, "streamSettings")
             new_stream = json.loads(json.dumps(old_stream))
@@ -1543,7 +1568,7 @@ def repair_reality_target(c, state, arch):
         nc, ns = node_view(plan["old_config"], state, entry["role"])
         row = managed_inbound(api, ns)
         require(row.get("id") == entry["inbound_id"], "节点身份已变化；停止修复。")
-        expected = inbound_payload(nc, ns)
+        expected = inbound_payload(plan["old_config"], state)
         require(all(row.get(k) == expected[k] for k in (
             "port", "protocol", "listen", "enable", "shareAddrStrategy", "shareAddr")),
             "节点端口、监听或分享地址已被另外修改；停止修复。")
@@ -1572,7 +1597,7 @@ def domain_config(c):
     values = {key: c[key] for key in ("SERVER_IP", "NODE_PORT", "PANEL_PORT", "SUB_PORT",
               "REALITY_HOST", "NODE_NAME", "SUB_DOMAIN", "ACME_EMAIL")}
     if "NODE_MODE" in c:
-        values.update(NODE_MODE=c["NODE_MODE"], ISP_NODE_PORT=c["ISP_NODE_PORT"])
+        values.update(NODE_MODE=c["NODE_MODE"])
         if "ISP" in c:
             p = c["ISP"]
             values.update(ISP_PROTOCOL=p["protocol"], ISP_HOST=p["host"], ISP_PORT=p["port"],
@@ -1586,7 +1611,6 @@ def domain_config(c):
         parsed["TRAFFIC_BUDGET"] = dict(c["TRAFFIC_BUDGET"])
     if "NODE_MODE" not in c:
         parsed.pop("NODE_MODE", None)
-        parsed.pop("ISP_NODE_PORT", None)
     return parsed
 
 
@@ -1679,7 +1703,7 @@ def selected_node_config(c):
     values = {key: c[key] for key in ("SERVER_IP", "NODE_PORT", "PANEL_PORT", "SUB_PORT",
               "REALITY_HOST", "NODE_NAME", "SUB_DOMAIN", "ACME_EMAIL")}
     values["PANEL_HTTPS"] = "true" if c.get("PANEL_HTTPS") else "false"
-    for key, default in (("NODE_NAME", c["NODE_NAME"]), ("NODE_MODE", "direct"), ("ISP_NODE_PORT", "8443"),
+    for key, default in (("NODE_NAME", c["NODE_NAME"]), ("NODE_MODE", "direct"),
                          ("TOTAL_MONTHLY_GB", "0"), ("ISP_MONTHLY_GB", "0"),
                          ("ISP_PROTOCOL", "socks5"), ("ISP_HOST", ""), ("ISP_PORT", ""),
                          ("ISP_USERNAME", ""), ("ISP_PASSWORD", ""), ("ISP_EXPECTED_IP", "")):
@@ -1687,14 +1711,127 @@ def selected_node_config(c):
     return parse_config(values)
 
 
+def shared_node_template(template, c, new_config, row):
+    """Replace only this installer's user routes; keep other inbound policies."""
+    target = json.loads(json.dumps(template))
+    old_rules = route_rules(c, {role: row for role in active_roles(c)})
+    rules = target["routing"]["rules"]
+    require(all(sum(rule == expected for rule in rules) == 1 for expected in old_rules),
+            "原客户端分流规则缺失或变化，请先恢复原规则。")
+    require(not any(row["tag"] in rule.get("inboundTag", []) and rule not in old_rules for rule in rules),
+            "共享入站存在其他路由，停止自动改写。")
+    rules[:] = [rule for rule in rules if rule not in old_rules]
+    existing_isp = [o for o in target["outbounds"] if o.get("tag") == "bootstrap-isp"]
+    require(not existing_isp or "ISP" in c, "bootstrap-isp 出站名称已被其他配置占用。")
+    target["outbounds"] = [o for o in target["outbounds"] if o.get("tag") != "bootstrap-isp"]
+    if "isp" in active_roles(new_config):
+        target["outbounds"].append(isp_outbound(new_config))
+    index = next((i for i, rule in enumerate(rules) if rule.get("outboundTag") not in ("api", "blocked")
+                  and not (rule.get("inboundTag") and row["tag"] not in rule["inboundTag"])), len(rules))
+    new_rows = {role: row for role in active_roles(new_config)}
+    rules[index:index] = route_rules(new_config, new_rows)
+    routing_matches(target, new_config, new_rows)
+    return target
+
+
+def plan_node_clients(api, c, new_config, state, row):
+    """Snapshot writable metadata, never traffic counters, before any API write."""
+    plans = []
+    rows = api.call("inbounds/list")
+    for role, identity in state["nodes"].items():
+        matches = [(r, client) for r in rows for client in object_field(r, "settings").get("clients", [])
+                   if client.get("id") == identity["uuid"]]
+        require(len(matches) <= 1 and (not matches or matches[0][0]["id"] == row["id"]),
+                "客户端关联已变化，必须仍属于同一个共享入站。")
+        old = None
+        used = 0
+        if matches:
+            client = matches[0][1]
+            detail = api.call("clients/get/" + urllib.parse.quote(client["email"], safe=""))
+            record = detail.get("client", {})
+            require(record.get("uuid") == identity["uuid"] and record.get("subId") == identity["sub_id"]
+                    and detail.get("inboundIds") == [row["id"]]
+                    and type(detail.get("usedTraffic")) is int and detail["usedTraffic"] >= 0,
+                    "原客户端身份、关联或流量记录异常。")
+            old = preserved_client(client, record)
+            for key in ("totalGB", "trafficReset", "trafficResetDay", "createdAt"):
+                if key in record:
+                    old[key] = record[key]
+            used = detail["usedTraffic"]
+        active = role in active_roles(new_config)
+        require(old is not None or active, "停用客户端记录丢失，停止自动重建。")
+        desired = dict(old) if old is not None else client_payload(new_config, state, role)
+        if active:
+            name = node_view(new_config, state, role)[0]["NODE_NAME"]
+            require(not any(str(client.get("email", "")).casefold() == name.casefold()
+                            and client.get("id") != identity["uuid"]
+                            for other in rows for client in object_field(other, "settings").get("clients", [])),
+                    "昵称对应的客户端名称已被占用。")
+            was_depleted = bool(old and old.get("totalGB", 0) and used >= old["totalGB"])
+            enabled = (bool(old.get("enable")) or was_depleted) if old is not None else True
+            if role not in active_roles(c):
+                enabled = identity.get("resume_enabled", True)
+            cap = client_quota(new_config, role)
+            desired.update(email=name, flow="xtls-rprx-vision",
+                           enable=bool(enabled and not (cap and used >= cap)),
+                           **native_quota_fields(new_config, role, state))
+            identity.pop("resume_enabled", None)
+        else:
+            if role in active_roles(c):
+                identity["resume_enabled"] = bool(old.get("enable") or
+                    old.get("totalGB", 0) and used >= old["totalGB"])
+            # Prevent monthly resets from re-enabling an inactive role. Its global
+            # record, UUID, Sub ID, quota and counters remain available for reuse.
+            desired.update(enable=False, trafficReset="never")
+        plans.append({"role": role, "old": old, "desired": desired})
+    return plans
+
+
+def apply_node_clients(api, plan, state):
+    """Resume client writes by UUID after an API response is lost."""
+    keys = ("id", "email", "subId", "flow", "enable", "totalGB", "trafficReset", "trafficResetDay")
+    for item in plan["clients"]:
+        desired, old = item["desired"], item["old"]
+        rows = api.call("inbounds/list")
+        matches = [(r, client) for r in rows for client in object_field(r, "settings").get("clients", [])
+                   if client.get("id") == desired["id"]]
+        require(len(matches) <= 1 and (not matches or matches[0][0]["id"] == plan["inbound_id"]),
+                "配置期间客户端关联已变化，停止自动覆盖。")
+        if not matches:
+            require(old is None, "原客户端已被删除，停止自动重建。")
+            api.call("clients/add", {"client": desired, "inboundIds": [plan["inbound_id"]]})
+            continue
+        client = matches[0][1]
+        detail = api.call("clients/get/" + urllib.parse.quote(client["email"], safe=""))
+        record = detail.get("client", {})
+        require(record.get("uuid") == desired["id"] and record.get("subId") == desired["subId"]
+                and detail.get("inboundIds") == [plan["inbound_id"]], "配置期间客户端身份已变化。")
+        current = preserved_client(client, record)
+        current.update({key: record[key] for key in ("totalGB", "trafficReset", "trafficResetDay") if key in record})
+        # Quota enforcement can disable a client between reads; never treat that
+        # expected native transition as a reason to reset its traffic or identity.
+        def matches_payload(expected):
+            return expected is not None and all(
+                current.get(key, "never" if key == "trafficReset" else 1 if key == "trafficResetDay" else None)
+                == expected.get(key, "never" if key == "trafficReset" else 1 if key == "trafficResetDay" else None)
+                or key == "enable" and current.get(key) is False and expected.get(key) is True
+                and current.get("totalGB", 0) and detail.get("usedTraffic", 0) >= current["totalGB"]
+                for key in keys)
+        require(matches_payload(old) or matches_payload(desired), "配置期间客户端设置已被另外修改。")
+        if not matches_payload(desired):
+            route = "clients/update/" + urllib.parse.quote(client["email"], safe="") + "?inboundIds=" + str(plan["inbound_id"])
+            api.call(route, desired)
+
+
 def configure_nodes(c, state, arch):
-    new_config = selected_node_config(c)  # 最先校验模式及 ISP 必填字段。
+    new_config = selected_node_config(c)
     require(state.get("phase") == "complete" and state.get("api_token"), "请先完成基础安装，再配置现有线路。")
     check_environment(new_config, True)
     print(firewall_instructions(new_config), flush=True)
     check_isp(new_config)
     verify_core(arch)
     validate_tls(new_config)
+    api = API(c, state)
     path = STATE_DIR / "node-change.json"
     plan = None
     if path.exists():
@@ -1713,30 +1850,20 @@ def configure_nodes(c, state, arch):
     if plan is None:
         check_db(c, state)
         require(service_active(), "现有服务未运行，请先恢复服务。")
-        api = API(c, state)
-        ensure_inbounds(api, c, state, allow_create=False)
+        rows = ensure_inbounds(api, c, state, allow_create=False)
+        row = next(iter(rows.values()))
         if "TRAFFIC_BUDGET" in new_config:
             bind_traffic_reset(c, state)
-        old_template = read_routing(api)
-        require("ISP" in c or not any(o.get("tag") == "bootstrap-isp" for o in old_template["outbounds"]),
-                "bootstrap-isp 出站名称已被其他配置占用。")
-        rows = api.call("inbounds/list")
         candidate = json.loads(json.dumps(state))
         prepare_nodes(new_config, candidate)
-        with contextlib.closing(sqlite3.connect("file:" + str(DB) + "?mode=ro", uri=True)) as db:
-            saved_path = db.execute('SELECT value FROM settings WHERE "key"=?', ("subPath",)).fetchone()
-        raw_path = state.get("raw_sub_path", saved_path[0] if saved_path else "/sub/")
-        require(re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", raw_path) is not None,
-                "原始订阅路径格式异常，请先检查面板的订阅路径。")
-        for role in active_roles(new_config):
-            nc, ns = node_view(new_config, candidate, role)
-            matching = [r for r in rows if any(v.get("id") == ns["uuid"] for v in object_field(r, "settings").get("clients", []))]
-            require(len(matching) <= 1 and (matching or not any(r.get("port") == nc["NODE_PORT"] for r in rows)),
-                    "所选节点端口已有其他入站，停止配置。")
-            if not matching:
-                require(not any(port == nc["NODE_PORT"] for _, port, _ in sockets()), "新线路端口已被占用。")
-            require(not any(str(v.get("email", "")).casefold() == nc["NODE_NAME"].casefold() and v.get("id") != ns["uuid"]
-                    for r in rows for v in object_field(r, "settings").get("clients", [])), "昵称对应的客户端名称已被占用。")
+        for identity in candidate["nodes"].values():
+            for key in ("private_key", "public_key", "short_id"):
+                identity[key] = state[key]
+        clients = plan_node_clients(api, c, new_config, candidate, row)
+        old_template = read_routing(api)
+        target = shared_node_template(old_template, c, new_config, row)
+        blocked = json.loads(json.dumps(old_template))
+        blocked["routing"]["rules"].insert(0, {"type": "field", "inboundTag": [row["tag"]], "outboundTag": "blocked"})
         backup = STATE_DIR / ("before-node-change-" + secrets.token_hex(6) + ".db")
         with contextlib.closing(sqlite3.connect("file:" + str(DB) + "?mode=ro", uri=True)) as source:
             with contextlib.closing(sqlite3.connect(backup)) as dest:
@@ -1744,108 +1871,48 @@ def configure_nodes(c, state, arch):
         backup.chmod(0o600)
         plan = {"owner": OWNER, "uuid": state["uuid"], "status": "prepared", "old_config": c,
                 "new_config": new_config, "nodes": candidate["nodes"], "backup_db": str(backup),
-                "raw_sub_path": raw_path, "old_template": old_template, "old_rows": rows}
+                "old_template": old_template, "blocked_template": blocked, "new_template": target,
+                "old_row": row, "inbound_id": row["id"], "clients": clients}
         atomic_write(path, json.dumps(plan, indent=2) + "\n")
-    planned_nodes = json.loads(json.dumps(plan["nodes"]))
-    for role, saved_node in state.get("nodes", {}).items():
-        if role in planned_nodes:
-            require(saved_node["uuid"] == planned_nodes[role]["uuid"], "节点身份记录已被另外修改。")
-            planned_nodes[role].update(saved_node)
-    state["nodes"] = planned_nodes
-    state["raw_sub_path"] = plan["raw_sub_path"]
-    save(state)  # 任何 API 写入之前保存新节点身份，响应丢失后仍使用同一 UUID/Sub ID。
-    run(["systemctl", "stop", "x-ui"])
-    require(not service_active(), "服务未停止，不修改数据库。")
-    current_settings = managed_settings(c, state)
-    require(current_settings == initial_settings(c, state) or
-            all(current_settings.get(k) == initial_settings(new_config, state).get(k) for k in current_settings),
-            "面板设置在配置期间已变化，停止自动覆盖。")
-    with contextlib.closing(sqlite3.connect(DB)) as db, db:
-        for key, value in initial_settings(new_config, state).items():
-            cursor = db.execute('UPDATE settings SET value=? WHERE "key"=?', (value, key))
-            if not cursor.rowcount:
-                db.execute('INSERT INTO settings ("key",value) VALUES (?,?)', (key, value))
-    run(["systemctl", "start", "x-ui"])
-    api = API(new_config, state)
-    wait_api(api)
-    ensure_node_keys(api, new_config, state)
-    plan["nodes"] = state["nodes"]
-    atomic_write(path, json.dumps(plan, indent=2) + "\n")
     for role, identity in state["nodes"].items():
-        ns = dict(state, **identity)
-        found = [r for r in api.call("inbounds/list") if any(v.get("id") == ns["uuid"] for v in object_field(r, "settings").get("clients", []))]
-        require(len(found) <= 1, "同一客户端出现在多个入站，停止配置。")
-        if role not in active_roles(new_config):
-            if found and found[0].get("enable"):
-                api.call("inbounds/setEnable/" + str(found[0]["id"]), {"enable": False})
-            continue
-        nc, ns = node_view(new_config, state, role)
-        if not found:
-            ensure_inbound(api, nc, ns)
-            continue
-        row = found[0]
-        expected = inbound_payload(nc, ns)
-        require(all(row.get(k) == expected[k] for k in ("protocol", "listen", "shareAddrStrategy", "shareAddr"))
-                and contains(object_field(row, "streamSettings"), object_field(expected, "streamSettings")),
-                "原入站协议、监听或分享地址已被另外修改。")
-        old_name = plan["old_config"]["NODE_NAME"] + ("-Direct" if role == "direct" else "-ISP")
-        if "NODE_MODE" not in plan["old_config"]:
-            old_name = plan["old_config"]["NODE_NAME"]
-        old_row = next((r for r in plan["old_rows"] if any(v.get("id") == ns["uuid"]
-                       for v in object_field(r, "settings").get("clients", []))), None)
-        old_email = "client-01" if "NODE_MODE" not in plan["old_config"] else old_name
-        if old_row:
-            # 停用期间可能修改过全局昵称；以本次变更前的受管节点快照为准。
-            old_name = old_row.get("remark")
-            old_email = next(v.get("email") for v in object_field(old_row, "settings")["clients"] if v.get("id") == ns["uuid"])
-        require(row.get("remark") in (old_name, nc["NODE_NAME"]) and row.get("port") == nc["NODE_PORT"],
-                "原入站名称或端口在配置期间已被另外修改。")
-        client = next(v for v in object_field(row, "settings")["clients"] if v.get("id") == ns["uuid"])
-        allowed_emails = {old_email, nc["NODE_NAME"]}
-        require(client.get("email") in allowed_emails, "原客户端名称已被另外修改。")
-        if client["email"] != nc["NODE_NAME"]:
-            route = "clients/update/" + urllib.parse.quote(client["email"], safe="") + "?inboundIds=" + str(row["id"])
-            if "TRAFFIC_BUDGET" in c or "TRAFFIC_BUDGET" in new_config:
-                record = api.call("clients/get/" + urllib.parse.quote(client["email"], safe="")).get("client", {})
-                require(record.get("uuid") == ns["uuid"], "改名前的客户端身份不一致。")
-                client = preserved_client(client, record)
-            api.call(route, dict(client, email=nc["NODE_NAME"]))
-        if row.get("remark") != nc["NODE_NAME"]:
-            api.call("inbounds/update/" + str(row["id"]), dict(row, remark=nc["NODE_NAME"]))
-        if not row.get("enable"):
-            api.call("inbounds/setEnable/" + str(row["id"]), {"enable": True})
-    apply_native_quotas(new_config, state, force="TRAFFIC_BUDGET" in c)
+        require(role in plan["nodes"] and identity["uuid"] == plan["nodes"][role]["uuid"],
+                "节点身份记录已被另外修改。")
+    state["nodes"] = json.loads(json.dumps(plan["nodes"]))
+    save(state)
+    current = read_routing(api)
+    require(current in (plan["old_template"], plan["blocked_template"], plan["new_template"]),
+            "配置期间路由已被另外修改，停止自动覆盖。")
+    # Deny this inbound while names, client availability and upstream routes are
+    # changed. Restart before client writes so ISP never falls through to Direct.
+    if current != plan["blocked_template"]:
+        api.call("xray/update", {"xraySetting": json.dumps(plan["blocked_template"])}, form=True)
+    run(["systemctl", "restart", "x-ui"])
+    wait_api(api)
+    require(read_routing(api) == plan["blocked_template"], "临时阻断规则未能读回确认。")
+    row = next((r for r in api.call("inbounds/list") if r.get("id") == plan["inbound_id"]), None)
+    require(row is not None and row.get("remark") in (plan["old_row"]["remark"], new_config["NODE_NAME"])
+            and all(row.get(key) == plan["old_row"].get(key) for key in
+                    ("port", "protocol", "listen", "enable", "shareAddrStrategy", "shareAddr"))
+            and object_field(row, "streamSettings") == object_field(plan["old_row"], "streamSettings"),
+            "共享入站设置在配置期间已变化。")
+    apply_node_clients(api, plan, state)
+    # Re-read the complete row so the remark update cannot restore stale clients.
+    row = next(r for r in api.call("inbounds/list") if r.get("id") == plan["inbound_id"])
+    if row.get("remark") != new_config["NODE_NAME"]:
+        api.call("inbounds/update/" + str(row["id"]), dict(row, remark=new_config["NODE_NAME"]))
     rows = ensure_inbounds(api, new_config, state, allow_create=False)
-    routing_path = STATE_DIR / "routing-plan.json"
-    if not plan.get("routing_prepared"):
-        current = read_routing(api)
-        target = json.loads(json.dumps(current))
-        tags = {r["tag"] for r in api.call("inbounds/list") if any(v.get("id") in
-                {n["uuid"] for n in state["nodes"].values()} for v in object_field(r, "settings").get("clients", []))}
-        require(not any(set(r.get("inboundTag", [])).intersection(tags) and not set(r["inboundTag"]).issubset(tags)
-                for r in target["routing"]["rules"]), "已有规则混合引用其他入站，停止自动改写。")
-        target["routing"]["rules"] = [r for r in target["routing"]["rules"] if not set(r.get("inboundTag", [])).intersection(tags)]
-        existing_isp = [o for o in target["outbounds"] if o.get("tag") == "bootstrap-isp"]
-        require(not existing_isp or "ISP" in plan["old_config"], "bootstrap-isp 出站名称已被其他配置占用。")
-        target["outbounds"] = [o for o in target["outbounds"] if o.get("tag") != "bootstrap-isp"]
-        if "isp" in active_roles(new_config):
-            target["outbounds"].append(isp_outbound(new_config))
-        rules = target["routing"]["rules"]
-        index = next((i for i, r in enumerate(rules) if r.get("outboundTag") not in ("api", "blocked")
-                      and not (r.get("inboundTag") and tags.isdisjoint(r["inboundTag"]))), len(rules))
-        rules[index:index] = route_rules(new_config, rows)
-        routing_matches(target, new_config, rows)
-        atomic_write(routing_path, json.dumps({"owner": OWNER, "uuid": state["uuid"], "config": new_config,
-                     "old_template": current, "new_template": target}, indent=2) + "\n")
-        plan["routing_prepared"] = True
-        atomic_write(path, json.dumps(plan, indent=2) + "\n")
-    ensure_routing(api, new_config, state, rows, allow_update=True)
+    require(read_routing(api) == plan["blocked_template"], "配置期间临时路由已被另外修改。")
+    api.call("xray/update", {"xraySetting": json.dumps(plan["new_template"])}, form=True)
+    routing_matches(read_routing(api), new_config, rows)
     run(["systemctl", "restart", "x-ui"])
     wait_api(api)
     verify_runtime(new_config, state, arch)
     state["config"] = new_config
     save(state)
     result = write_results(new_config, state)
+    atomic_write(STATE_DIR / "routing-plan.json", json.dumps({"owner": OWNER, "uuid": state["uuid"],
+                 "config": new_config, "old_template": plan["old_template"],
+                 "new_template": plan["new_template"]}, indent=2) + "\n")
     plan["status"] = "complete"
     atomic_write(path, json.dumps(plan, indent=2) + "\n")
     print(result)
@@ -1991,7 +2058,7 @@ def main():
         ensure_node_keys(api, c, state)
         if "TRAFFIC_BUDGET" in c:
             bind_traffic_reset(c, state)
-        print("创建并读回所选 VLESS + REALITY 线路…", flush=True)
+        print("创建并读回共享 VLESS + REALITY 入站及客户端…", flush=True)
         rows = ensure_inbounds(api, c, state)
         ensure_routing(api, c, state, rows, allow_update=True)
         run(["systemctl", "restart", "x-ui"])

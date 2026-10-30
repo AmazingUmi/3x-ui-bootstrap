@@ -9,7 +9,8 @@
 ## 当前能力
 
 - Direct 使用 VPS 出口；ISP 使用指定的 SOCKS5 / HTTP 代理，先验证认证、HTTPS 转发和实际出口。
-- 每条线路使用独立客户端、UUID、REALITY 密钥和订阅 ID。
+- Direct 和 ISP 共用一个 VLESS + REALITY 入站（默认 `443/TCP`）；按独立客户端 UUID 认证后分别路由到 VPS 或 ISP 出口。
+- 每条线路保留独立订阅 ID 和配额；同一入站共用 REALITY 密钥，客户端名称为 `<昵称>-Direct`、`<昵称>-ISP`。
 - 自动申请、续期公网 IP 或域名 HTTPS 证书；域名模式可选开放 HTTPS 面板。
 - 使用面板原生客户端月配额，按原部署日重置；双线路固定分配 Direct = 总预算 − ISP 预留。
 - 校验官方发行包摘要，并验证正式入站的 REALITY / VLESS / Vision 认证、HTTPS 转发和出口。
@@ -22,13 +23,13 @@
 | --- | --- | --- |
 | **2.2.92（3345）** | **26.6.27** | 历史用户实测：订阅导入、网页访问和预期出口 IP 检查通过 |
 
-此记录来自此前部署的用户反馈。**本项目尚未验证其他 Shadowrocket / Xray 版本组合。** 更换任一版本前需重新实测，新的组合通过验收前保持固定内核版本。
+此记录来自此前双入站部署的用户反馈，不代表 0.2.0 共享入站拓扑已完成客户端验收。**本项目尚未验证其他 Shadowrocket / Xray 版本组合。** 更换任一版本前需重新实测，新的组合通过验收前保持固定内核版本。
 
 ## 1. 准备 VPS
 
 适用于新建、已绑定静态公网 IPv4 的 Ubuntu 22.04+ / Debian 12+ VPS，要求 systemd、Python 3.10+、amd64 或 arm64。
 
-准备好 SSH 登录方式和 sudo 权限。脚本只接管自身创建的安装；已有其他 3X-UI 部署时会停止。
+准备好 SSH 登录方式和 sudo 权限。以下步骤用于在全新 VPS 上部署共享入站方案。
 
 部署前重点确认：**配置填对、域名解析生效、端口已开放**。
 
@@ -75,12 +76,11 @@ SUB_DOMAIN 可留空，订阅使用 VPS 公网 IP 和可信 HTTPS 证书；此�
 | --- | --- | --- |
 | 实际 SSH 端口（常见为 22） | 登录、上传、SSH 隧道 | 始终保留 |
 | 80 | 证书申请与自动续期 | 始终需要 |
-| 443 | Direct 节点 | 模式包含 Direct |
-| 8443 | ISP 节点 | 模式包含 ISP |
+| 443 | 共享节点入站（Direct / ISP） | 所有模式 |
 | 2096 | 公网 HTTPS 订阅 | 始终需要 |
 | 7777 | 公网 HTTPS 面板 | 仅 PANEL_HTTPS=true 时；建议限制管理来源 IP |
 
-修改端口后以配置校验输出为准。默认 SSH 面板无需开放 7777。
+修改端口后以配置校验输出为准。Direct 和 ISP 都使用 `NODE_PORT`，无需单独开放 ISP 入站端口；订阅和面板仍使用各自的端口。默认 SSH 面板无需开放 7777。
 
 ## 4. 上传、登录和安装
 
@@ -114,7 +114,7 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 保持该终端开启，再打开安装结果输出的 http://127.0.0.1:17777/ 后带随机路径的完整 URL。域名 HTTPS 面板直接使用安装结果中的 HTTPS URL。
 
-将对应线路的订阅导入 Mihomo / Shadowrocket，验证网页访问和实际出口。服务端本机检查通过后，仍需完成客户端公网验收。
+双线路模式会输出 `<昵称>-Direct` 和 `<昵称>-ISP` 两组订阅及 VLESS 链接；两者连接同一 VPS 的同一端口，UUID 不同。将对应订阅导入 Mihomo / Shadowrocket，分别验证网页访问与出口：Direct 应为 VPS IP，ISP 应为供应商出口。修改客户端显示名称不会改变出口，路由由服务器根据认证身份决定。服务端本机检查通过后，仍需完成客户端公网验收。
 
 ## 维护命令
 
@@ -144,7 +144,7 @@ bash scripts/check.sh
 
 ## 项目状态
 
-当前为 0.1.0 初始化版本，由已经使用的一键脚本整理而来，新增独立配置及离线检查。项目仓库：[AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap)。
+当前为 0.2.0 共享入站版本，保留独立配置与原生客户端配额；新的单端口拓扑仍需真实 VPS 和客户端验收。项目仓库：[AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap)。
 
 ## 许可证
 

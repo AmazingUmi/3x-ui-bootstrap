@@ -30,18 +30,21 @@ class DeploymentContracts(unittest.TestCase):
         values.update(changes)
         return self.config(**values)
 
-    def test_versions_and_existing_state_owner_are_preserved(self):
+    def test_versions_are_pinned(self):
         self.assertEqual(self.app.VERSION, "v3.10.2")
         self.assertEqual(self.app.CORE_VERSION, "26.6.27")
         self.assertEqual(self.app.OWNER, "3x-ui-bootstrap-v5")
+        self.assertEqual(self.app.PROJECT_VERSION, "0.2.0")
 
-    def test_routing_uses_actual_inbound_tags_and_blocks_isp_udp(self):
+    def test_routing_uses_authenticated_clients_on_one_inbound_and_blocks_isp_udp(self):
         c = self.dual_config()
-        rules = self.app.route_rules(c, {"direct": {"tag": "actual-443"}, "isp": {"tag": "actual-8443"}})
+        row = {"tag": "actual-443"}
+        rules = self.app.route_rules(c, {"direct": row, "isp": row})
         self.assertEqual(rules, [
-            {"type": "field", "inboundTag": ["actual-443"], "outboundTag": "direct"},
-            {"type": "field", "inboundTag": ["actual-8443"], "network": "udp", "outboundTag": "blocked"},
-            {"type": "field", "inboundTag": ["actual-8443"], "outboundTag": "bootstrap-isp", "network": "tcp"},
+            {"type": "field", "inboundTag": ["actual-443"], "user": ["TestNode-Direct"], "outboundTag": "direct"},
+            {"type": "field", "inboundTag": ["actual-443"], "user": ["TestNode-ISP"], "network": "udp", "outboundTag": "blocked"},
+            {"type": "field", "inboundTag": ["actual-443"], "user": ["TestNode-ISP"], "outboundTag": "bootstrap-isp", "network": "tcp"},
+            {"type": "field", "inboundTag": ["actual-443"], "outboundTag": "blocked"},
         ])
 
     def test_native_fixed_allocation_and_fractional_gib(self):
@@ -91,7 +94,7 @@ class DeploymentContracts(unittest.TestCase):
         self.assertNotEqual(state["nodes"]["isp"]["sub_id"], original["sub_id"])
         direct_c, direct_s = self.app.node_view(c, state, "direct")
         isp_c, isp_s = self.app.node_view(c, state, "isp")
-        self.assertEqual((direct_c["NODE_PORT"], isp_c["NODE_PORT"]), (443, 8443))
+        self.assertEqual((direct_c["NODE_PORT"], isp_c["NODE_PORT"]), (443, 443))
         self.assertNotEqual(self.app.mihomo_link(direct_c, direct_s), self.app.mihomo_link(isp_c, isp_s))
 
     def test_isp_password_stays_out_of_vless_link(self):

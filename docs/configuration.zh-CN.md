@@ -33,7 +33,9 @@
 | `NODE_NAME` | 可选，建议修改 | 字符串，`"MyNode"` | 自定义昵称，1–64 字符，不能包含空白、路径分隔符或控制字符 |
 | `NODE_MODE` | 可选 | 字符串，`"direct"` | `direct`、`direct+isp`、`isp` 三选一 |
 
-`direct` 仅使用 VPS 出口；`isp` 仅使用 ISP 出口；`direct+isp` 同时创建两条独立线路。
+`direct` 仅使用 VPS 出口；`isp` 仅使用 ISP 出口；`direct+isp` 在同一个 VLESS + REALITY 入站内创建两个客户端。所有模式都使用 `NODE_PORT`（默认 `443`）。
+
+客户端分别命名为 `<昵称>-Direct`、`<昵称>-ISP`，UUID 和订阅 ID 各自独立，共用该入站的 REALITY 密钥。Xray 按 UUID 认证，再用路由 `user` 匹配服务器上的客户端 email：Direct 指向 `direct`，ISP 指向 `bootstrap-isp`。修改客户端应用中的节点显示名称不会改变出口。
 
 ## 3. ISP 上游账号：按模式必填
 
@@ -71,12 +73,11 @@
 
 | 字段 | 必填性 | 类型 / 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `NODE_PORT` | 可选 | 整数，`443` | Direct 入站端口，仅包含 Direct 时使用 |
-| `ISP_NODE_PORT` | 可选 | 整数，`8443` | ISP 入站端口，仅包含 ISP 时使用 |
+| `NODE_PORT` | 可选 | 整数，`443` | 所有启用客户端共用的 VLESS + REALITY 入站端口，ISP 单线路也使用此端口 |
 | `PANEL_PORT` | 可选 | 整数，`7777` | 面板端口；默认仅监听本机，开启 HTTPS 面板时需手动放行 |
 | `SUB_PORT` | 可选 | 整数，`2096` | 公网 HTTPS 订阅端口，需手动放行 |
 
-端口范围为 1–65535，不能和实际 SSH 端口冲突。所选线路的端口、面板、订阅必须互不相同，`80/TCP` 留给证书签发与续期。`ISP_PORT` 是连接上游代理的端口，与 VPS 的 `ISP_NODE_PORT` 用途不同。
+端口范围为 1–65535，不能和实际 SSH 端口冲突。共享节点端口、面板、订阅必须互不相同，`80/TCP` 留给证书签发与续期。`ISP_PORT` 是 VPS 连接上游代理的端口；`NODE_PORT` 接收 Direct 和 ISP 客户端连接，无需单独开放 ISP 入站端口。
 
 ## 7. 月流量配额：可选
 
@@ -101,6 +102,7 @@
 {
   "NODE_NAME": "MyNode",
   "NODE_MODE": "direct+isp",
+  "NODE_PORT": 443,
   "ISP_PROTOCOL": "socks5",
   "ISP_HOST": "proxy.example.com",
   "ISP_PORT": 1080,
@@ -111,11 +113,11 @@
 }
 ~~~
 
-此配置给 Direct 分配 900 GiB，给 ISP 分配 100 GiB。使用面板原生客户端月配额，超额后由面板停用；重置日绑定原部署日期，面板时区零点重置，短月取最后一天。两条线路不相互借用剩余额度；客户端统计不等同于供应商整机账单。
+此配置给 Direct 分配 900 GiB，给 ISP 分配 100 GiB。使用面板原生客户端月配额，超额后仅停用对应客户端，另一客户端继续使用共享入站；重置日绑定原部署日期，面板时区零点重置，短月取最后一天。两条线路不相互借用剩余额度；客户端统计不等同于供应商整机账单。
 
 单独 ISP 模式只创建 ISP 线路。总预算与 ISP 额度同时有限时，取两者较小值。Direct 模式的 ISP_MONTHLY_GB 必须为 0。双线路设置有限总预算时，必须同时设置大于 0、低于总预算的 ISP 预留。
 
-ISP 方案支持认证的单个 SOCKS5 / HTTP 上游，当前验证 TCP 转发，ISP 线路 UDP 明确阻断；不会在上游失败时自动改走 Direct。上游账号、密码不写入客户端订阅。
+ISP 方案支持认证的单个 SOCKS5 / HTTP 上游，支持 TCP 转发，ISP 线路 UDP 明确阻断；不会在上游失败时自动改走 Direct。上游账号、密码不写入客户端订阅。
 
 ## 域名 HTTPS 示例
 
@@ -135,10 +137,12 @@ A 记录必须直接指向 SERVER_IP。面板与订阅使用同一域名及证�
 
 本机与 VPS 上均执行 chmod 600 config.json。不要把真实配置、安装状态、订阅 ID、VLESS 链接、私钥或 result.txt 提交到仓库。Git 忽略规则不能保护任意自定义文件名，提交前仍需检查暂存文件。
 
-## 已有部署
+## 维护与部署范围
 
 不需要配置文件的 --show、--traffic-status、--diagnose 和 --repair-reality-target 使用服务器保存的数据。
 
-显式修改操作按类别读取配置：--configure-domain 修改域名、面板 HTTPS 和证书邮箱；--configure-nodes 修改昵称、模式、ISP 入站端口、上游及配额；--configure-traffic 只修改配额。它们都要求配置中的 SERVER_IP 与当前部署一致。现有 Direct、面板、订阅端口不通过这些操作修改，需先评估迁移方案。
+显式修改操作按类别读取配置：--configure-domain 修改域名、面板 HTTPS 和证书邮箱；--configure-nodes 修改昵称、模式、上游及配额；--configure-traffic 只修改配额。它们都要求配置中的 SERVER_IP 与当前部署一致。共享节点、面板、订阅端口不通过这些操作修改。
 
-从旧版脚本迁移时，将原脚本头部各项值填写到新 config.json，并把端口改成 JSON 整数、PANEL_HTTPS 改成 JSON 布尔值、无上限额度改成数字 0。状态目录和安装归属格式保持不变，但本次初始化没有在现有 VPS 上验证迁移。
+全新 VPS 部署时，请从 `config.example.json` 创建私有配置，并按安装步骤执行。
+
+历史已验证组合为 **Shadowrocket 2.2.92（3345）+ Xray-core 26.6.27**，该记录不代表其他版本组合或新的共享入站拓扑已通过验收。部署后请在真实客户端中分别测试两组订阅并核对出口 IP。

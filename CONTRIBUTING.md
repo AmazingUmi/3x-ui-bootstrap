@@ -19,10 +19,11 @@ Checks do not request certificates, install software, connect to real ISP proxie
 - Keep Xray pinned to 26.6.27. The historically verified Shadowrocket pair is 2.2.92 (3345) with Xray 26.6.27; other Shadowrocket / Xray combinations are unverified. Upgrades require actual acceptance results from both Shadowrocket and Mihomo.
 - Preserve ownership checks, resumable installation, existing client identities, traffic counters, and the original deployment day. Do not blindly overwrite manual panel changes.
 - ISP failure must not automatically fall back to Direct. Explain native client quotas separately from whole-server traffic billing.
+- Shared-inbound routing must match the authenticated client email. Cover two clients on one port, independent subscriptions and quotas, blocked ISP UDP, and blocked unmatched clients. Historical version-pair evidence does not replace real-client acceptance of a new topology.
 - Commit only example data. Check staged configurations, logs, accounts, subscriptions, and keys for private information.
 
 Documentation defaults to English, with Simplified Chinese copies named *.zh-CN.md. Keep both languages in sync, including field requirements, default values, commands, and verification limits.
 
 ## Release preparation
 
-This project uses the [MIT License](LICENSE). Before a formal release, complete VPS acceptance testing for the new configuration entry point. Passing local checks does not establish successful deployment or client connectivity.
+This project uses the [MIT License](LICENSE). Before a formal release, complete VPS acceptance testing for the shared-inbound topology. Passing local checks does not establish successful deployment or client connectivity.
