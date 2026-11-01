@@ -19,5 +19,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install local gateway test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nginx openssl
       - name: Check syntax and run offline tests
         run: bash scripts/check.sh

@@ -33,8 +33,32 @@ class DeploymentContracts(unittest.TestCase):
     def test_versions_are_pinned(self):
         self.assertEqual(self.app.VERSION, "v3.10.2")
         self.assertEqual(self.app.CORE_VERSION, "26.6.27")
-        self.assertEqual(self.app.OWNER, "3x-ui-bootstrap-v5")
-        self.assertEqual(self.app.PROJECT_VERSION, "0.2.0")
+        self.assertEqual(self.app.OWNER, "3x-ui-bootstrap-v6")
+        self.assertEqual(self.app.PROJECT_VERSION, "0.3.0")
+
+    def test_subscription_backend_is_loopback_http_in_both_panel_modes(self):
+        for public_panel in (False, True):
+            with self.subTest(public_panel=public_panel):
+                c = self.config(SUB_DOMAIN="node.example.com", PANEL_HTTPS=public_panel,
+                                SUB_PORT=2096, SUB_BACKEND_PORT=32096)
+                settings = self.app.initial_settings(c, {"base_path": "/private-panel/"})
+                self.assertEqual(settings["subListen"], "127.0.0.1")
+                self.assertEqual(settings["subPort"], "32096")
+                self.assertEqual(settings["subCertFile"], "")
+                self.assertEqual(settings["subKeyFile"], "")
+                self.assertEqual(settings["webListen"], "0.0.0.0" if public_panel else "127.0.0.1")
+                self.assertEqual(settings["webCertFile"], c["CERT_FILE"] if public_panel else "")
+                self.assertEqual(settings["webKeyFile"], c["CERT_KEY"] if public_panel else "")
+
+    def test_native_panel_subscription_urls_use_public_https_gateway_in_domain_and_ip_modes(self):
+        for domain, host in (("node.example.com", "node.example.com"), ("", "8.8.8.8")):
+            with self.subTest(domain=domain):
+                c = self.config(SUB_DOMAIN=domain, SUB_PORT=32096, SUB_BACKEND_PORT=42096)
+                settings = self.app.initial_settings(c, {"base_path": "/private-panel/"})
+                self.assertEqual(settings["subURI"], "https://" + host + ":32096/sub/")
+                self.assertEqual(settings["subClashURI"], "https://" + host + ":32096/mihomo/")
+                self.assertNotIn("42096", settings["subURI"])
+                self.assertNotIn("42096", settings["subClashURI"])
 
     def test_routing_uses_authenticated_clients_on_one_inbound_and_blocks_isp_udp(self):
         c = self.dual_config()

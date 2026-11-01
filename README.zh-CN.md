@@ -1,153 +1,58 @@
 # 3X-UI Bootstrap
 
-[English](README.md) | 简体中文
+[项目首页](README.md) | 简体中文
 
-面向 Ubuntu / Debian 的 3X-UI 一键部署工具。填写独立 JSON 配置，上传脚本与配置文件，即可部署 VLESS + REALITY 节点。
+面向全新 Ubuntu / Debian VPS 的一键部署工具。填写 JSON 配置，上传脚本和配置文件，即可部署 VLESS + REALITY 节点、HTTPS 订阅和管理面板。
 
-支持 Direct、ISP、Direct + ISP 三种线路模式；域名可选，面板默认通过 SSH 隧道管理。安装完成后输出控制台账号、密码、完整 URL、Mihomo 订阅、Shadowrocket 订阅和 VLESS 链接。
+支持 Direct、ISP、Direct + ISP 三种模式。Direct 与 ISP 共用节点端口，使用独立身份、出口和流量配额；ISP 使用指定的 SOCKS5 / HTTP 上游，失效时不会回退到 Direct。
 
-## 当前能力
+## 文档
 
-- Direct 使用 VPS 出口；ISP 使用指定的 SOCKS5 / HTTP 代理，先验证认证、HTTPS 转发和实际出口。
-- Direct 和 ISP 共用一个 VLESS + REALITY 入站（默认 `443/TCP`）；按独立客户端 UUID 认证后分别路由到 VPS 或 ISP 出口。
-- 每条线路保留独立订阅 ID 和配额；同一入站共用 REALITY 密钥，客户端名称为 `<昵称>-Direct`、`<昵称>-ISP`。
-- 自动申请、续期公网 IP 或域名 HTTPS 证书；域名模式可选开放 HTTPS 面板。
-- 使用面板原生客户端月配额，按原部署日重置；双线路固定分配 Direct = 总预算 − ISP 预留。
-- 校验官方发行包摘要，并验证正式入站的 REALITY / VLESS / Vision 认证、HTTPS 转发和出口。
-
-固定版本：3x-ui **v3.10.2**、Xray-core **26.6.27**、Certbot **5.8.0**。Xray 固定版本用于保留已验证的 Shadowrocket 兼容性；升级前需要重新验收 Shadowrocket 和 Mihomo。
-
-## 已验证的 Shadowrocket 兼容组合
-
-| Shadowrocket | Xray-core | 验证记录 |
+| 文档 | 内容 | English |
 | --- | --- | --- |
-| **2.2.92（3345）** | **26.6.27** | 历史用户实测：订阅导入、网页访问和预期出口 IP 检查通过 |
+| [操作指南](docs/operations.zh-CN.md) | 新机安装、客户端导入、验收、日常维护和故障排查 | [Operations guide](docs/operations.md) |
+| [安全说明](docs/security.zh-CN.md) | 公网暴露、订阅隔离、凭据保护、版本公告和安全复测记录 | [Security notes](docs/security.md) |
+| [参数配置介绍](docs/configuration.zh-CN.md) | 必填项、默认值、参数约束、配置示例和修改范围 | [Configuration reference](docs/configuration.md) |
 
-此记录来自此前双入站部署的用户反馈，不代表 0.2.0 共享入站拓扑已完成客户端验收。**本项目尚未验证其他 Shadowrocket / Xray 版本组合。** 更换任一版本前需重新实测，新的组合通过验收前保持固定内核版本。
+首次部署从操作指南开始；填写配置时查参数介绍；上线前阅读安全说明。
 
-## 1. 准备 VPS
+## 部署结构
 
-适用于新建、已绑定静态公网 IPv4 的 Ubuntu 22.04+ / Debian 12+ VPS，要求 systemd、Python 3.10+、amd64 或 arm64。
+```text
+客户端 ── 443/TCP ── Xray VLESS + REALITY ── Direct / ISP 出口
+客户端 ── 2096/TCP HTTPS ── Nginx ── 127.0.0.1:12096 HTTP ── 订阅后端
+管理员 ── SSH 隧道 ── 127.0.0.1:7777 ── 管理面板（默认）
+```
 
-准备好 SSH 登录方式和 sudo 权限。以下步骤用于在全新 VPS 上部署共享入站方案。
+域名可选；启用 `PANEL_HTTPS` 后，面板改为公网域名 HTTPS 入口。端口均可在新机配置中指定。订阅后端始终只绑定本机，不需要开放 `12096`。
 
-部署前重点确认：**配置填对、域名解析生效、端口已开放**。
+## 快速入口
 
-## 2. 填写配置
+在新 VPS 上完成配置上传、域名解析和防火墙准备后执行：
 
-在本机项目目录执行：
-
-~~~bash
-cp config.example.json config.json
-chmod 600 config.json
-nano config.json
-~~~
-
-配置示例已按 VPS、线路模式、ISP 账号、ISP 选项、域名、端口、配额、REALITY 目标的顺序分组。
-
-| 分类 | 填写要求 |
-| --- | --- |
-| 始终必填 | `SERVER_IP`：VPS 静态公网 IPv4 |
-| 按模式必填 | 包含 ISP 时填写 `ISP_HOST`、`ISP_PORT`、`ISP_USERNAME`、`ISP_PASSWORD` |
-| 按选项必填 | `PANEL_HTTPS=true` 时填写 `SUB_DOMAIN`；双线路设置有限总预算时填写 `ISP_MONTHLY_GB` |
-| 可选 | 昵称、线路模式、端口、ISP 协议与预期出口、域名、邮箱、流量上限、REALITY 目标均可按需调整 |
-
-**默认 Direct 线路、SSH 面板、不限流量时，只需填写 `SERVER_IP`。** `NODE_NAME` 默认 `MyNode`，建议改为自己的昵称；`NODE_MODE` 默认 `direct`。
-
-配置格式为 JSON：端口和流量额度使用数字，`PANEL_HTTPS` 使用 `true` / `false`，未填写的 `ISP_PORT` 使用 `null`。
-
-先执行本地校验，无需 sudo 或网络：
-
-~~~bash
-bash ./install-3x-ui.sh --config ./config.json --validate-config
-~~~
-
-完整字段、双线路及域名示例见 [配置说明](docs/configuration.zh-CN.md)。真实 config.json 已加入 Git 忽略规则；请只提交示例。
-
-## 3. 解析域名并开放端口
-
-SUB_DOMAIN 可留空，订阅使用 VPS 公网 IP 和可信 HTTPS 证书；此时面板通过 SSH 隧道访问。
-
-填写域名时，将 A 记录直接指向 SERVER_IP，关闭该记录的 CDN 代理，等待公共 DNS 解析一致。PANEL_HTTPS 为 true 时，面板与订阅共用该域名及证书。
-
-以下是默认端口，**云防火墙和服务器防火墙均需检查**。脚本只输出清单，不修改防火墙或 SSH 设置。
-
-| TCP 端口 | 用途 | 何时开放 |
-| --- | --- | --- |
-| 实际 SSH 端口（常见为 22） | 登录、上传、SSH 隧道 | 始终保留 |
-| 80 | 证书申请与自动续期 | 始终需要 |
-| 443 | 共享节点入站（Direct / ISP） | 所有模式 |
-| 2096 | 公网 HTTPS 订阅 | 始终需要 |
-| 7777 | 公网 HTTPS 面板 | 仅 PANEL_HTTPS=true 时；建议限制管理来源 IP |
-
-修改端口后以配置校验输出为准。Direct 和 ISP 都使用 `NODE_PORT`，无需单独开放 ISP 入站端口；订阅和面板仍使用各自的端口。默认 SSH 面板无需开放 7777。
-
-## 4. 上传、登录和安装
-
-在本机执行，将 YOUR_VPS_IP 和 ubuntu 替换成实际信息。命令使用现有 SSH 配置或代理中的密钥：
-
-~~~bash
-scp ./install-3x-ui.sh ./config.json ubuntu@YOUR_VPS_IP:~/
-ssh ubuntu@YOUR_VPS_IP
-~~~
-
-登录 VPS 后执行：
-
-~~~bash
+```bash
 chmod 600 ~/config.json
 sudo bash ~/install-3x-ui.sh --config ~/config.json --check
+```
+
+检查通过后安装：
+
+```bash
 sudo bash ~/install-3x-ui.sh --config ~/config.json --install
-~~~
+```
 
---check 会联网验证候选配置、ISP、DNS 和安装条件，但不安装软件或修改服务。安装失败后，保留状态，修复问题并使用同一配置重试。
+完整准备步骤见[操作指南](docs/operations.zh-CN.md)。仅支持新机部署和本版本安装中断后重试，不迁移旧部署。
 
-## 5. 访问面板与导入订阅
+## 版本与验证
 
-安装成功时，终端输出完整访问地址和订阅链接，也保存在 VPS 的 /var/lib/3x-ui-bootstrap/result.txt，仅 root 可读。
+项目版本为 **0.3.0**。固定依赖：3x-ui **v3.10.2**、Xray-core **26.6.27**、Certbot **5.8.0**；Nginx 使用 Ubuntu / Debian 软件源中的版本。
 
-默认 SSH 面板需要在本机另外建立隧道；下面示例使用默认面板端口 7777：
+2026-11-01 已收到新部署正常使用的反馈，并完成公网 IPv4 订阅暴露复测。客户端具体版本及未覆盖项目见[操作指南](docs/operations.zh-CN.md)和[安全说明](docs/security.zh-CN.md)。3x-ui 3.10.2 涉及上游已公布的安全问题，适用条件与修复版本也列在安全说明中。
 
-~~~bash
-ssh -N -o ExitOnForwardFailure=yes \
-  -L 127.0.0.1:17777:127.0.0.1:7777 ubuntu@YOUR_VPS_IP
-~~~
+开发检查运行 `bash scripts/check.sh`。贡献与发布约定见[贡献说明](CONTRIBUTING.zh-CN.md)，版本变化见[更新记录](CHANGELOG.zh-CN.md)。
 
-保持该终端开启，再打开安装结果输出的 http://127.0.0.1:17777/ 后带随机路径的完整 URL。域名 HTTPS 面板直接使用安装结果中的 HTTPS URL。
+## 许可证与依赖
 
-双线路模式会输出 `<昵称>-Direct` 和 `<昵称>-ISP` 两组订阅及 VLESS 链接；两者连接同一 VPS 的同一端口，UUID 不同。将对应订阅导入 Mihomo / Shadowrocket，分别验证网页访问与出口：Direct 应为 VPS IP，ISP 应为供应商出口。修改客户端显示名称不会改变出口，路由由服务器根据认证身份决定。服务端本机检查通过后，仍需完成客户端公网验收。
+本项目采用 [MIT License](LICENSE)。第三方项目遵循各自的许可证，本仓库不包含其发行二进制。
 
-## 维护命令
-
-在 VPS 上执行；使用配置的操作默认读取脚本同目录的 config.json，也可明确使用 --config 指定。
-
-| 操作 | 命令 | 配置来源 |
-| --- | --- | --- |
-| 显示账号和链接 | sudo bash ~/install-3x-ui.sh --show | 服务器保存的结果 |
-| 查询原生月流量 | sudo bash ~/install-3x-ui.sh --traffic-status | 服务器保存的部署 |
-| 临时 REALITY 诊断 | sudo bash ~/install-3x-ui.sh --diagnose | 服务器保存的部署 |
-| 修改域名、面板 HTTPS | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain | 配置中的域名、HTTPS、邮箱 |
-| 修改昵称、模式和 ISP | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes | 配置中的线路、ISP、配额 |
-| 修改月配额 | sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic | 配置中的总预算、ISP 预留 |
-| 修复 REALITY 目标 | sudo bash ~/install-3x-ui.sh --repair-reality-target | 服务器保存的部署和修复记录 |
-
-配置文件是候选设置。面板内手工修改 ISP 后，不要用旧配置执行 --configure-nodes；先同步配置文件，避免覆盖当前账号。
-
-排查说明见 [常见问题](docs/troubleshooting.zh-CN.md)。
-
-## 开发与验证
-
-~~~bash
-bash scripts/check.sh
-~~~
-
-本地检查覆盖 Shell / Python 语法、配置边界、线路路由、配额和 CLI。CI 不部署 VPS，不使用真实 ISP 凭据；真实客户端与证书签发需要另行验收。贡献说明见 [CONTRIBUTING.md](CONTRIBUTING.zh-CN.md)。
-
-## 项目状态
-
-当前为 0.2.0 共享入站版本，保留独立配置与原生客户端配额；新的单端口拓扑仍需真实 VPS 和客户端验收。项目仓库：[AmazingUmi/3x-ui-bootstrap](https://github.com/AmazingUmi/3x-ui-bootstrap)。
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE)。第三方项目继续遵循各自的许可证。
-
-依赖项目：[3x-ui](https://github.com/MHSanaei/3x-ui)、[Xray-core](https://github.com/XTLS/Xray-core)、[Certbot](https://github.com/certbot/certbot)。本项目不包含它们的发行二进制，安装时下载并校验固定版本。
+依赖：[3x-ui](https://github.com/MHSanaei/3x-ui)、[Xray-core](https://github.com/XTLS/Xray-core)、[Certbot](https://github.com/certbot/certbot)、[Nginx](https://nginx.org/)。

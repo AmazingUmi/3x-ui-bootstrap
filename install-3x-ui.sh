@@ -42,7 +42,7 @@ if sys.version_info < (3, 10):
     raise SystemExit("需要 Python 3.10+；服务器请使用 Ubuntu 22.04+ 或 Debian 12+。")
 from zoneinfo import ZoneInfo
 
-PROJECT_VERSION = "0.2.0"
+PROJECT_VERSION = "0.3.0"
 MODE = "--install"
 INPUT_CONFIG = None
 
@@ -66,9 +66,14 @@ UNIT = Path("/etc/systemd/system/x-ui.service")
 RENEW_SERVICE = Path("/etc/systemd/system/3x-ui-cert-renew.service")
 RENEW_TIMER = Path("/etc/systemd/system/3x-ui-cert-renew.timer")
 RENEW_HOOK_DIR = Path("/etc/letsencrypt/renewal-hooks/deploy")
+NGINX_SERVICE = "3x-ui-subscription"
+NGINX_UNIT = Path("/etc/systemd/system/3x-ui-subscription.service")
+NGINX_CONF = STATE_DIR / "nginx.conf"
+NGINX_PID = Path("/run/3x-ui-subscription/nginx.pid")
+NGINX_ERROR_LOG = STATE_DIR / "nginx-error.log"
 LEGACY_QUOTA_SERVICE = Path("/etc/systemd/system/3x-ui-quota.service")
 LEGACY_QUOTA_TIMER = Path("/etc/systemd/system/3x-ui-quota.timer")
-OWNER = "3x-ui-bootstrap-v5"
+OWNER = "3x-ui-bootstrap-v6"
 ENV = {k: v for k, v in os.environ.items() if not k.startswith(("XUI_", "BOOTSTRAP_"))}
 ENV.update(XUI_DB_TYPE="sqlite", XUI_DB_FOLDER="/etc/x-ui",
            XUI_LOG_FOLDER="/var/log/x-ui", XUI_BIN_FOLDER=str(APP / "bin"),
@@ -87,7 +92,8 @@ CONFIG_DEFAULTS = {
     "NODE_NAME": "MyNode", "NODE_MODE": "direct", "NODE_PORT": 443,
     "ISP_PROTOCOL": "socks5", "ISP_HOST": "",
     "ISP_PORT": None, "ISP_USERNAME": "", "ISP_PASSWORD": "", "ISP_EXPECTED_IP": "",
-    "PANEL_PORT": 7777, "SUB_PORT": 2096, "SUB_DOMAIN": "", "PANEL_HTTPS": False,
+    "PANEL_PORT": 7777, "SUB_PORT": 2096, "SUB_BACKEND_PORT": 12096,
+    "SUB_DOMAIN": "", "PANEL_HTTPS": False,
     "TOTAL_MONTHLY_GB": 0, "ISP_MONTHLY_GB": 0, "ACME_EMAIL": "",
     "REALITY_HOST": "www.cloudflare.com",
 }
@@ -137,7 +143,7 @@ def load_config_values(path):
         if key == "PANEL_HTTPS":
             require(type(value) is bool, "PANEL_HTTPS 必须是 JSON 布尔值 true 或 false。")
             values[key] = "true" if value else "false"
-        elif key in ("NODE_PORT", "PANEL_PORT", "SUB_PORT", "ISP_PORT"):
+        elif key in ("NODE_PORT", "PANEL_PORT", "SUB_PORT", "SUB_BACKEND_PORT", "ISP_PORT"):
             if key == "ISP_PORT" and value is None:
                 values[key] = ""
                 continue
@@ -219,15 +225,15 @@ def parse_config(values):
         raise RuntimeError("SERVER_IP 必须是公网 IPv4，请替换示例占位符。") from None
     require(ip.version == 4 and ip.is_global and not ip.is_multicast,
             "SERVER_IP 必须是公网 IPv4。")
-    for key in ("NODE_PORT", "PANEL_PORT", "SUB_PORT"):
+    for key in ("NODE_PORT", "PANEL_PORT", "SUB_PORT", "SUB_BACKEND_PORT"):
         c[key] = str(c[key])
         require(re.fullmatch(r"[1-9][0-9]{0,4}", c[key]) is not None,
                 key + " 必须是 1–65535 的整数。")
         c[key] = int(c[key])
         require(c[key] <= 65535, key + " 超出范围。")
-    used = node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"]]
+    used = node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"], c["SUB_BACKEND_PORT"]]
     require(len(set(used)) == len(used),
-            "节点、面板、订阅端口必须互不相同。")
+            "节点、面板、公网订阅和内部订阅端口必须互不相同。")
     for key in ("REALITY_HOST", "SUB_DOMAIN"):
         host = c[key]
         if key == "SUB_DOMAIN" and host == "":
@@ -416,23 +422,26 @@ def check_environment(c, owned):
     require(shutil.which("apt-get") and shutil.which("systemctl") and shutil.which("ss"),
             "缺少 apt-get、systemctl 或 ss（iproute2）。")
     if not owned:
-        paths = [APP, DB.parent, UNIT, RENEW_SERVICE, RENEW_TIMER,
+        paths = [APP, DB.parent, UNIT, RENEW_SERVICE, RENEW_TIMER, NGINX_UNIT,
+                 Path("/etc/nginx"), Path("/etc/systemd/system/nginx.service"),
                  Path("/usr/bin/x-ui"), Path("/etc/default/x-ui")]
         existing_unit = subprocess.run(["systemctl", "cat", "x-ui.service"],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
         require(not any(p.exists() or p.is_symlink() for p in paths) and not existing_unit,
-                "发现已有 3X-UI 或残留文件；此脚本只接管自己的安装，请勿删除旧数据后盲目重试。")
+                "发现已有 3X-UI / Nginx 或残留文件；本版仅支持全新 VPS，不迁移旧部署。")
     for address, port, line in sockets():
-        if port in node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"]]:
-            expected = "xray" if port in node_ports(c) else '"x-ui"'
+        if port in node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"], c["SUB_BACKEND_PORT"]]:
+            expected = "xray" if port in node_ports(c) else "nginx" if port == c["SUB_PORT"] else '"x-ui"'
             require(owned and expected in line, "配置的端口已被其他进程占用：" + str(port))
+            require(port != c["SUB_BACKEND_PORT"] or address == "127.0.0.1",
+                    "内部订阅服务必须只监听 127.0.0.1。")
     # 即使 sshd 暂未监听，也拒绝其配置端口；不修改任何 SSH 设置。
     sshd = shutil.which("sshd") or "/usr/sbin/sshd"
     if Path(sshd).exists():
         p = subprocess.run([sshd, "-T"], text=True, capture_output=True)
         require(p.returncode == 0, "无法读取 sshd 有效配置，请先检查 SSH 服务。")
         ssh_ports = {int(x) for x in re.findall(r"^port (\d+)$", p.stdout, re.M)}
-        require(not ssh_ports.intersection(node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"]]),
+        require(not ssh_ports.intersection(node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"], c["SUB_BACKEND_PORT"]]),
                 "配置端口与 SSH 端口冲突。")
     return arch
 
@@ -453,7 +462,8 @@ def check_target(c):
 def firewall_instructions(c):
     lines = ["端口放行（云防火墙与服务器防火墙均需手动配置）："]
     lines.append("  节点共享入站（" + "/".join(active_roles(c)) + "）：" + str(c["NODE_PORT"]) + "/TCP")
-    lines.append("  订阅：" + str(c["SUB_PORT"]) + "/TCP")
+    lines.append("  Nginx HTTPS 订阅：" + str(c["SUB_PORT"]) + "/TCP")
+    lines.append("  内部订阅：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "，无需公网放行")
     if c.get("PANEL_HTTPS"):
         lines.append("  域名 HTTPS 面板：" + str(c["PANEL_PORT"]) + "/TCP（允许管理设备来源 IP）")
     else:
@@ -535,7 +545,7 @@ def check_dns(c):
 
 
 def tls_guard_source(c):
-    # 同一检查用于安装验收和 systemd 每次启动，避免后端证书加载失败时回退明文 HTTP。
+    # Nginx 与公网面板均在启动前检查证书；订阅后端只在回环提供 HTTP。
     ip_mode = not c["SUB_DOMAIN"]
     commands = [
         ["/usr/bin/openssl", "x509", "-in", c["CERT_FILE"], "-noout",
@@ -582,9 +592,15 @@ def install_renewal_hook(c):
     text = ("#!/bin/sh\nset -eu\n"
             'case " ${RENEWED_DOMAINS:-} " in\n'
             '  *" ' + c["SUB_HOST"] + ' "*)\n'
-            '    if systemctl is-active --quiet x-ui || systemctl is-failed --quiet x-ui; then systemctl restart x-ui; fi\n'
+            '    if systemctl is-active --quiet ' + NGINX_SERVICE + ' || systemctl is-failed --quiet ' + NGINX_SERVICE + '; then\n'
+            '      /usr/bin/python3 ' + str(STATE_DIR / "check-sub-tls.py") + '\n'
+            '      /usr/sbin/nginx -t -c ' + str(NGINX_CONF) + '\n'
+            '      systemctl reload-or-restart ' + NGINX_SERVICE + '\n'
+            '    fi\n' +
+            ('    if systemctl is-active --quiet x-ui || systemctl is-failed --quiet x-ui; then systemctl restart x-ui; fi\n'
+             if c.get("PANEL_HTTPS") else '') +
             '    ;;\nesac\n')
-    require(not path.exists() or path.read_text() == text, "已有不同内容的同名证书续期 hook，请先检查。")
+    require(not path.is_symlink(), "证书续期 hook 不能是符号链接。")
     atomic_write(path, text)
     path.chmod(0o700)
 
@@ -621,9 +637,9 @@ def install_renewal_timer(c):
 
 
 def activate_certificate(c):
+    atomic_write(STATE_DIR / "check-sub-tls.py", tls_guard_source(c))
     install_renewal_hook(c)
     install_renewal_timer(c)
-    atomic_write(STATE_DIR / "check-sub-tls.py", tls_guard_source(c))
 
 
 def ensure_certificate(c, activate=True):
@@ -705,15 +721,159 @@ def install_core(arch):
     verify_core(arch)
 
 
+def subscription_paths(c, state):
+    """The only public download routes. Never whitelist a whole path prefix."""
+    require(state.get("raw_sub_path", "/sub/") == "/sub/",
+            "本版只管理固定订阅下载路径；请勿手动修改 subPath。")
+    ids = []
+    for role in active_roles(c):
+        node = state.get("nodes", {}).get(role, {})
+        sub_id = node.get("sub_id")
+        require(isinstance(sub_id, str) and re.fullmatch(r"[0-9a-f]{16}", sub_id),
+                "订阅 ID 格式异常，拒绝生成 Nginx 配置。")
+        ids.append(sub_id)
+    require(len(set(ids)) == len(ids), "不同线路的订阅 ID 不能重复。")
+    return tuple(prefix + sub_id for sub_id in ids for prefix in ("/sub/", "/mihomo/"))
+
+
+def nginx_quote(value):
+    # Config values here are hostnames, absolute paths, or validated URLs, not
+    # Nginx variables. Refuse interpolation and control characters explicitly.
+    require(isinstance(value, str) and value and "$" not in value
+            and not any(ord(x) < 32 or ord(x) == 127 for x in value),
+            "Nginx 配置值包含不支持的字符。")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_subscription_nginx(c, state):
+    paths = subscription_paths(c, state)
+    for key in ("SUB_PORT", "SUB_BACKEND_PORT"):
+        require(type(c[key]) is int and 1 <= c[key] <= 65535, "订阅端口无效。")
+    require(c["SUB_PORT"] != c["SUB_BACKEND_PORT"], "公网订阅和内部订阅端口不能相同。")
+    host = nginx_quote(c["SUB_HOST"])
+    lines = [
+        "# Managed by " + OWNER + "; contains private subscription IDs.",
+        "user www-data;", "worker_processes auto;",
+        "pid " + nginx_quote(str(NGINX_PID)) + ";",
+        "error_log " + nginx_quote(str(NGINX_ERROR_LOG)) + " error;",
+        "events { worker_connections 1024; }",
+        "http {",
+        "    access_log off;", "    server_tokens off;", "    default_type application/octet-stream;",
+        "    server_names_hash_bucket_size 256;",
+        # $request_uri retains the original encoding and query. An exact
+        # location alone would also match normalized aliases and ?html=1.
+        "    map $request_uri $subscription_allowed {", "        default 0;",
+    ]
+    lines += ["        " + nginx_quote(path) + " 1;" for path in paths]
+    lines += [
+        "    }",
+        "    server {",
+        "        listen 0.0.0.0:" + str(c["SUB_PORT"]) + " ssl default_server;",
+        "        server_name " + host + ";",
+        "        ssl_certificate " + nginx_quote(c["CERT_FILE"]) + ";",
+        "        ssl_certificate_key " + nginx_quote(c["CERT_KEY"]) + ";",
+        "        ssl_protocols TLSv1.2 TLSv1.3;",
+        "        client_max_body_size 1k;",
+        "        client_header_timeout 10s;", "        client_body_timeout 10s;",
+        "        keepalive_timeout 15s;",
+        "        if ($host != " + host + ") { return 404; }",
+        "        if ($subscription_allowed = 0) { return 404; }",
+        "        if ($request_method !~ ^(GET|HEAD)$) { return 404; }",
+        "        add_header Cache-Control \"no-store\" always;",
+    ]
+    for path in paths:
+        lines += [
+            "        location = " + nginx_quote(path) + " {",
+            "            proxy_pass http://127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + ";",
+            "            proxy_http_version 1.1;",
+            "            proxy_pass_request_headers off;",
+            "            proxy_set_header Host " + host + ";",
+            "            proxy_set_header User-Agent $http_user_agent;",
+            "            proxy_set_header Accept \"*/*\";",
+            "            proxy_set_header Connection \"\";",
+            "            proxy_pass_request_body off;",
+            "            proxy_set_header Content-Length \"\";",
+            "            proxy_buffering off;", "            proxy_max_temp_file_size 0;",
+            "            proxy_connect_timeout 5s;", "            proxy_read_timeout 30s;",
+            "            proxy_ignore_headers X-Accel-Redirect;",
+            "            proxy_hide_header Profile-Web-Page-Url;",
+            "        }",
+        ]
+    lines += ["        location / { return 404; }", "    }", "}", ""]
+    return "\n".join(lines)
+
+
+def render_subscription_unit():
+    return (
+        "[Unit]\nDescription=HTTPS subscription gateway for 3X-UI\n"
+        "Wants=network-online.target\nAfter=network-online.target x-ui.service\n\n"
+        "[Service]\nType=simple\nUMask=0077\n"
+        "RuntimeDirectory=3x-ui-subscription\nRuntimeDirectoryMode=0700\n"
+        "ExecStartPre=/usr/bin/python3 " + str(STATE_DIR / "check-sub-tls.py") + "\n"
+        "ExecStartPre=/usr/sbin/nginx -t -c " + str(NGINX_CONF) + "\n"
+        "ExecStart=/usr/sbin/nginx -c " + str(NGINX_CONF) + " -g 'daemon off;'\n"
+        "ExecReload=/usr/bin/python3 " + str(STATE_DIR / "check-sub-tls.py") + "\n"
+        "ExecReload=/usr/sbin/nginx -t -c " + str(NGINX_CONF) + "\n"
+        "ExecReload=/bin/kill -HUP $MAINPID\n"
+        "KillSignal=SIGQUIT\nTimeoutStopSec=15s\nRestart=on-failure\nRestartSec=5\n\n"
+        "[Install]\nWantedBy=multi-user.target\n"
+    )
+
+
+def install_subscription_gateway(c, state):
+    """Called only after clients exist; reconfiguration regenerates active IDs."""
+    require(not NGINX_CONF.is_symlink() and not NGINX_UNIT.is_symlink(),
+            "Nginx 受管文件不能是符号链接。")
+    content = render_subscription_nginx(c, state)
+    old = NGINX_CONF.read_text() if NGINX_CONF.exists() else None
+    atomic_write(NGINX_CONF, content)
+    NGINX_CONF.chmod(0o600)
+    # nginx -t opens its PID/log paths even before systemd creates RuntimeDirectory.
+    NGINX_PID.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        run(["/usr/sbin/nginx", "-t", "-c", str(NGINX_CONF)])
+    except Exception:
+        if old is None:
+            NGINX_CONF.unlink()
+        else:
+            atomic_write(NGINX_CONF, old)
+        raise
+    unit = render_subscription_unit()
+    if not NGINX_UNIT.exists() or NGINX_UNIT.read_text() != unit:
+        atomic_write(NGINX_UNIT, unit)
+        NGINX_UNIT.chmod(0o644)
+        run(["systemctl", "daemon-reload"])
+    run(["systemctl", "enable", NGINX_SERVICE])
+    # A restart closes old workers and keepalive connections after a role is
+    # removed. Certificate renewal can use a graceful reload instead.
+    run(["systemctl", "restart", NGINX_SERVICE])
+
+
+def check_subscription_gateway(c, state):
+    require(NGINX_CONF.is_file() and not NGINX_CONF.is_symlink()
+            and NGINX_CONF.stat().st_mode & 0o077 == 0
+            and NGINX_CONF.read_text() == render_subscription_nginx(c, state),
+            "Nginx 订阅放行规则或配置权限已变化。")
+    require(NGINX_UNIT.is_file() and not NGINX_UNIT.is_symlink()
+            and NGINX_UNIT.read_text() == render_subscription_unit(),
+            "Nginx 订阅服务单元已变化。")
+    require(subprocess.run(["systemctl", "is-active", "--quiet", NGINX_SERVICE],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0,
+            "Nginx 订阅服务未运行。")
+
+
 def initial_settings(c, state):
     public_panel = c.get("PANEL_HTTPS", False)
+    subscription_origin = "https://" + c["SUB_HOST"] + ":" + str(c["SUB_PORT"])
     settings = {"webListen": "0.0.0.0" if public_panel else "127.0.0.1", "webPort": str(c["PANEL_PORT"]),
             "webDomain": c["SUB_HOST"] if public_panel else "",
             "webCertFile": c["CERT_FILE"] if public_panel else "",
             "webKeyFile": c["CERT_KEY"] if public_panel else "",
-            "webBasePath": state["base_path"], "subEnable": "true", "subListen": "0.0.0.0",
-            "subPort": str(c["SUB_PORT"]), "subClashEnable": "true", "subClashPath": "/mihomo/",
-            "subDomain": c["SUB_HOST"], "subCertFile": c["CERT_FILE"], "subKeyFile": c["CERT_KEY"]}
+            "webBasePath": state["base_path"], "subEnable": "true", "subListen": "127.0.0.1",
+            "subPort": str(c["SUB_BACKEND_PORT"]), "subClashEnable": "true", "subClashPath": "/mihomo/",
+            "subJsonEnable": "false",
+            "subDomain": c["SUB_HOST"], "subCertFile": "", "subKeyFile": "",
+            "subURI": subscription_origin + "/sub/", "subClashURI": subscription_origin + "/mihomo/"}
     if "NODE_MODE" in c:
         settings.update(remarkTemplate="{{EMAIL}}", subPath=state.get("raw_sub_path", "/sub/"), subEncrypt="true")
     return settings
@@ -743,9 +903,9 @@ def check_db(c, state):
             "设置已变化；停止自动安装，请核对面板访问模式、HTTPS 证书、端口和 Mihomo 路径。")
 
 
-def write_unit():
+def write_unit(c):
     unit = """[Unit]
-Description=3X-UI (optional HTTPS panel and public HTTPS subscription, bootstrap v5)
+Description=3X-UI (loopback subscription backend, bootstrap v6)
 After=network-online.target
 Wants=network-online.target
 
@@ -753,7 +913,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/usr/local/x-ui
-ExecStartPre=/usr/bin/python3 @TLS_GUARD@
+@TLS_GUARD@
 ExecStart=/usr/local/x-ui/x-ui
 Environment=XUI_DB_TYPE=sqlite
 Environment=XUI_DB_FOLDER=/etc/x-ui
@@ -768,7 +928,8 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 """
-    atomic_write(UNIT, unit.replace("@TLS_GUARD@", str(STATE_DIR / "check-sub-tls.py")))
+    guard = "ExecStartPre=/usr/bin/python3 " + str(STATE_DIR / "check-sub-tls.py") if c.get("PANEL_HTTPS") else ""
+    atomic_write(UNIT, unit.replace("@TLS_GUARD@", guard))
     UNIT.chmod(0o644)
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "enable", "x-ui"])
@@ -1176,13 +1337,15 @@ def mihomo_link(c, state):
     return "https://" + c["SUB_HOST"] + ":" + str(c["SUB_PORT"]) + "/mihomo/" + state["sub_id"]
 
 
-def https_request(port, host, path, payload=None, token=None, form=False, user_agent="mihomo"):
+def https_request(port, host, path, payload=None, token=None, form=False, user_agent="mihomo",
+                  return_headers=False, method=None):
     # 回环 TCP 连接使用实际域名/IP 校验证书，保留 Host，不依赖公网回流或代理设置。
     context = ssl.create_default_context()
     with socket.create_connection(("127.0.0.1", port), timeout=15) as tcp:
         with context.wrap_socket(tcp, server_hostname=host) as tls:
             body = b"" if payload is None else (urllib.parse.urlencode(payload).encode() if form else json.dumps(payload).encode("utf-8"))
-            headers = [("POST" if payload is not None else "GET") + " " + path + " HTTP/1.1",
+            verb = method or ("POST" if payload is not None else "GET")
+            headers = [verb + " " + path + " HTTP/1.1",
                        "Host: " + host + ":" + str(port), "User-Agent: " + user_agent, "Connection: close"]
             if token is not None:
                 headers.append("Authorization: Bearer " + token)
@@ -1190,16 +1353,40 @@ def https_request(port, host, path, payload=None, token=None, form=False, user_a
                 headers += ["Content-Type: " + ("application/x-www-form-urlencoded" if form else "application/json"),
                             "Content-Length: " + str(len(body))]
             tls.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body)
-            with http.client.HTTPResponse(tls) as response:
+            with http.client.HTTPResponse(tls, method=verb) as response:
                 response.begin()
                 raw = response.read(2 * 1024 * 1024 + 1)
                 require(len(raw) <= 2 * 1024 * 1024, "HTTPS 响应过大。")
+                if return_headers:
+                    return response.status, raw, {k.lower(): v for k, v in response.getheaders()}
                 return response.status, raw
 
 
+def verify_subscription_usage(headers):
+    value = headers.get("subscription-userinfo", "")
+    fields = dict(re.findall(r"(?:^|;)\s*(upload|download|total|expire)=(\d+)\s*(?=;|$)", value))
+    require(set(fields) == {"upload", "download", "total", "expire"},
+            "订阅缺少有效流量/额度响应头，客户端无法刷新用量。")
+    require(re.fullmatch(r"\d+", headers.get("profile-update-interval", "")) is not None,
+            "订阅缺少有效更新间隔响应头。")
+
+
+def verify_subscription_denials(c, state):
+    allowed = subscription_paths(c, state)
+    paths = ("/", "/assets/", "/assets/AppSidebar.js", "/sub/assets/",
+             "/sub/anything/assets/AppSidebar.js", "/sub/invalid-id", "/mihomo/invalid-id",
+             allowed[0] + "/assets/AppSidebar.js", allowed[0] + "?html=1",
+             allowed[0] + "?format=info", "/%73ub/" + allowed[0].rsplit("/", 1)[1])
+    for path in paths:
+        status, _ = https_request(c["SUB_PORT"], c["SUB_HOST"], path)
+        require(status == 404, "Nginx 未正确拒绝非订阅下载请求。")
+
+
 def fetch_subscription(c, state):
-    status, raw = https_request(c["SUB_PORT"], c["SUB_HOST"], "/mihomo/" + state["sub_id"])
+    status, raw, headers = https_request(c["SUB_PORT"], c["SUB_HOST"], "/mihomo/" + state["sub_id"],
+                                        return_headers=True)
     require(status == 200, "Mihomo 订阅未返回 HTTP 200。")
+    verify_subscription_usage(headers)
     return raw
 
 
@@ -1229,8 +1416,10 @@ def verify_subscription(c, state):
 
 
 def verify_shadowrocket(c, state):
-    status, raw = https_request(c["SUB_PORT"], c["SUB_HOST"], state.get("raw_sub_path", "/sub/") + state["sub_id"], user_agent="Shadowrocket")
+    status, raw, headers = https_request(c["SUB_PORT"], c["SUB_HOST"], state.get("raw_sub_path", "/sub/") + state["sub_id"],
+                                        user_agent="Shadowrocket", return_headers=True)
     require(status == 200, "Shadowrocket 订阅未返回 HTTP 200。")
+    verify_subscription_usage(headers)
     try:
         links = base64.b64decode(b"".join(raw.split()), validate=True).decode("utf-8").splitlines()
         require(len(links) == 1, "Shadowrocket 订阅应只包含对应的一条线路。")
@@ -1249,7 +1438,8 @@ def verify_shadowrocket(c, state):
 
 def listener_summary(c, rows):
     parts = []
-    services = [("面板", c["PANEL_PORT"]), ("订阅", c["SUB_PORT"]), ("共享节点", c["NODE_PORT"])]
+    services = [("面板", c["PANEL_PORT"]), ("Nginx 订阅", c["SUB_PORT"]),
+                ("内部订阅", c["SUB_BACKEND_PORT"]), ("共享节点", c["NODE_PORT"])]
     for label, service_port in services:
         found = []
         for address, port, line in rows:
@@ -1400,10 +1590,18 @@ def diagnose_node(c, state, arch):
 
 
 def verify_runtime(c, state, arch):
-    check_db(c, state)
-    verify_core(arch)
-    validate_tls(c)
-    require(service_active(), "x-ui 服务未运行。")
+    # A changed subListen can fail the database contract before socket checks.
+    # Close both services on either configuration or listener failures.
+    try:
+        check_db(c, state)
+        check_subscription_gateway(c, state)
+        verify_core(arch)
+        validate_tls(c)
+        require(service_active(), "x-ui 服务未运行。")
+    except Exception:
+        run(["systemctl", "stop", NGINX_SERVICE])
+        run(["systemctl", "stop", "x-ui"])
+        raise
     if "TRAFFIC_BUDGET" in c:
         require(state.get("traffic_reset", {}).get("timezone") == panel_timezone(), "面板时区已变化；请先恢复原月配额时区。")
         verify_native_metering(API(c, state))
@@ -1413,14 +1611,17 @@ def verify_runtime(c, state, arch):
         rows = sockets()
         panel = [r for r in rows if r[1] == c["PANEL_PORT"]]
         sub = [r for r in rows if r[1] == c["SUB_PORT"]]
+        backend = [r for r in rows if r[1] == c["SUB_BACKEND_PORT"]]
         node = [r for r in rows if r[1] in node_ports(c)]
         panel_addresses = ("0.0.0.0", "*", "::", "[::]") if c.get("PANEL_HTTPS") else ("127.0.0.1",)
         if (not all(r[0] in panel_addresses and '"x-ui"' in r[2] for r in panel)
-                or not all(r[0] in ("0.0.0.0", "*", "::", "[::]") and '"x-ui"' in r[2] for r in sub)):
+                or not all(r[0] == "0.0.0.0" and "nginx" in r[2] for r in sub)
+                or not all(r[0] == "127.0.0.1" and '"x-ui"' in r[2] for r in backend)):
             detail = listener_summary(c, rows)
+            run(["systemctl", "stop", NGINX_SERVICE])
             run(["systemctl", "stop", "x-ui"])
             raise RuntimeError("面板或订阅监听不符合配置要求；" + detail + "；已停止 x-ui。")
-        if panel and sub and expected_ports.issubset({r[1] for r in node}) and all("xray" in r[2] for r in node):
+        if panel and sub and backend and expected_ports.issubset({r[1] for r in node}) and all("xray" in r[2] for r in node):
             break
         time.sleep(1)
     else:
@@ -1429,6 +1630,7 @@ def verify_runtime(c, state, arch):
          str(APP / "bin/config.json")], cwd=APP)
     inbound_rows = ensure_inbounds(API(c, state), c, state, allow_create=False)
     try:
+        verify_subscription_denials(c, state)
         if c.get("PANEL_HTTPS"):
             require(isinstance(API(c, state).call("inbounds/list"), list), "面板 HTTPS API 验收失败。")
         for role in active_roles(c):
@@ -1440,6 +1642,7 @@ def verify_runtime(c, state, arch):
             if "NODE_MODE" in c:
                 verify_shadowrocket(nc, ns)
     except Exception:
+        run(["systemctl", "stop", NGINX_SERVICE])
         run(["systemctl", "stop", "x-ui"])
         raise
     ensure_routing(API(c, state), c, state, inbound_rows)
@@ -1483,7 +1686,8 @@ def write_results(c, state):
         "REALITY 目标 / SNI：" + c["REALITY_HOST"] + "\n"
         "面板监听：" + ("0.0.0.0:" if public_panel else "127.0.0.1:") + str(c["PANEL_PORT"]) +
         ("（域名 HTTPS）\n" if public_panel else "（SSH 隧道）\n") +
-        "订阅监听：0.0.0.0:" + str(c["SUB_PORT"]) + "（HTTPS，无需 SSH 隧道）\n\n" +
+        "订阅入口：0.0.0.0:" + str(c["SUB_PORT"]) + "（Nginx HTTPS，仅有效下载地址）\n" +
+        "订阅后端：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "（HTTP，不开放公网）\n\n" +
         firewall_instructions(c) + "\n" +
         "已验证：未耗尽配额线路的本机 REALITY/VLESS/Vision 认证、HTTPS 转发与出口检查。\n"
         "下一步：客户端使用本次 Mihomo 订阅或 VLESS 链接；" +
@@ -1594,7 +1798,7 @@ def repair_reality_target(c, state, arch):
 
 
 def domain_config(c):
-    values = {key: c[key] for key in ("SERVER_IP", "NODE_PORT", "PANEL_PORT", "SUB_PORT",
+    values = {key: c[key] for key in ("SERVER_IP", "NODE_PORT", "PANEL_PORT", "SUB_PORT", "SUB_BACKEND_PORT",
               "REALITY_HOST", "NODE_NAME", "SUB_DOMAIN", "ACME_EMAIL")}
     if "NODE_MODE" in c:
         values.update(NODE_MODE=c["NODE_MODE"])
@@ -1642,7 +1846,7 @@ def configure_domain(c, state, arch):
                     and new_config == previous["new_config"], "域名切换尚未完成，请使用原域名和 PANEL_HTTPS 参数续跑。")
             plan = previous
         else:
-            fields = ("SERVER_IP", "PANEL_PORT", "SUB_PORT", "SUB_DOMAIN", "SUB_HOST", "CERT_FILE", "CERT_KEY", "ACME_EMAIL", "PANEL_HTTPS")
+            fields = ("SERVER_IP", "PANEL_PORT", "SUB_PORT", "SUB_BACKEND_PORT", "SUB_DOMAIN", "SUB_HOST", "CERT_FILE", "CERT_KEY", "ACME_EMAIL", "PANEL_HTTPS")
             require(all(c.get(k) == previous["new_config"].get(k) for k in fields),
                     "已完成的域名切换记录与安装参数不一致。")
     if plan is None and new_config == c:
@@ -1676,6 +1880,7 @@ def configure_domain(c, state, arch):
                 "new_settings": initial_settings(new_config, state)}
         atomic_write(path, json.dumps(plan, indent=2) + "\n")
     print("切换面板与订阅地址；保留账号、Base URL、节点和客户端…", flush=True)
+    run(["systemctl", "stop", NGINX_SERVICE])
     run(["systemctl", "stop", "x-ui"])
     require(not service_active(), "服务未停止，不写入正在运行的数据库。")
     require(managed_settings(c, state) in (plan["old_settings"], plan["new_settings"]),
@@ -1685,10 +1890,12 @@ def configure_domain(c, state, arch):
             db.execute('UPDATE settings SET value = ? WHERE "key" = ?', (value, key))
     activate_certificate(new_config)
     check_db(new_config, state)
+    write_unit(new_config)
     run(["systemctl", "start", "x-ui"])
     api = API(new_config, state)
     wait_api(api)
     ensure_inbounds(api, new_config, state, allow_create=False)
+    install_subscription_gateway(new_config, state)
     verify_runtime(new_config, state, arch)
     state["config"] = new_config
     save(state)
@@ -1700,7 +1907,7 @@ def configure_domain(c, state, arch):
 
 
 def selected_node_config(c):
-    values = {key: c[key] for key in ("SERVER_IP", "NODE_PORT", "PANEL_PORT", "SUB_PORT",
+    values = {key: c[key] for key in ("SERVER_IP", "NODE_PORT", "PANEL_PORT", "SUB_PORT", "SUB_BACKEND_PORT",
               "REALITY_HOST", "NODE_NAME", "SUB_DOMAIN", "ACME_EMAIL")}
     values["PANEL_HTTPS"] = "true" if c.get("PANEL_HTTPS") else "false"
     for key, default in (("NODE_NAME", c["NODE_NAME"]), ("NODE_MODE", "direct"),
@@ -1879,6 +2086,8 @@ def configure_nodes(c, state, arch):
                 "节点身份记录已被另外修改。")
     state["nodes"] = json.loads(json.dumps(plan["nodes"]))
     save(state)
+    # Stop public downloads while the active-role set is changing.
+    run(["systemctl", "stop", NGINX_SERVICE])
     current = read_routing(api)
     require(current in (plan["old_template"], plan["blocked_template"], plan["new_template"]),
             "配置期间路由已被另外修改，停止自动覆盖。")
@@ -1906,6 +2115,7 @@ def configure_nodes(c, state, arch):
     routing_matches(read_routing(api), new_config, rows)
     run(["systemctl", "restart", "x-ui"])
     wait_api(api)
+    install_subscription_gateway(new_config, state)
     verify_runtime(new_config, state, arch)
     state["config"] = new_config
     save(state)
@@ -2026,7 +2236,10 @@ def main():
         if not state.get("files_installed"):
             print("安装必要依赖并校验官方发行包…", flush=True)
             run(["apt-get", "update"])
-            packages = ["curl", "ca-certificates", "tar", "python3-yaml", "openssl", "python3-venv"]
+            # This VPS is dedicated to the bootstrap. Prevent the distro's
+            # default site from starting on :80 during package installation.
+            run(["systemctl", "mask", "nginx.service"])
+            packages = ["curl", "ca-certificates", "tar", "python3-yaml", "openssl", "python3-venv", "nginx"]
             run(["apt-get", "install", "-y", "--no-install-recommends"] + packages)
             install_release(arch)
             print("安装并校验 Xray-core " + CORE_VERSION + "…", flush=True)
@@ -2047,7 +2260,7 @@ def main():
                 require(match is not None, "未取得 API Token。")
                 state["api_token"] = match[1]
                 save(state)
-            write_unit()
+            write_unit(c)
             state["panel_ready"] = True
             save(state)
         check_db(c, state)
@@ -2064,6 +2277,7 @@ def main():
         run(["systemctl", "restart", "x-ui"])
         wait_api(api)
         ensure_inbounds(api, c, state)
+        install_subscription_gateway(c, state)
         verify_runtime(c, state, arch)
         result = write_results(c, state)
         state["phase"] = "complete"

@@ -22,8 +22,8 @@ Checks do not request certificates, install software, connect to real ISP proxie
 - Shared-inbound routing must match the authenticated client email. Cover two clients on one port, independent subscriptions and quotas, blocked ISP UDP, and blocked unmatched clients. Historical version-pair evidence does not replace real-client acceptance of a new topology.
 - Commit only example data. Check staged configurations, logs, accounts, subscriptions, and keys for private information.
 
-Documentation defaults to English, with Simplified Chinese copies named *.zh-CN.md. Keep both languages in sync, including field requirements, default values, commands, and verification limits.
+User documentation has three topics: [operations](docs/operations.md), [security](docs/security.md), and [configuration](docs/configuration.md). Put troubleshooting in the operations guide and keep README focused on the project overview and document links. Topic documents have English versions and Simplified Chinese copies named `*.zh-CN.md`; the project home page is in Simplified Chinese. Keep commands, defaults, constraints, and verification records aligned across languages.
 
 ## Release preparation
 
-This project uses the [MIT License](LICENSE). Before a formal release, complete VPS acceptance testing for the shared-inbound topology. Passing local checks does not establish successful deployment or client connectivity.
+This project uses the [MIT License](LICENSE). Before a formal release, record VPS and client acceptance for the release being published. See the operations guide for the 2026-11-01 deployment feedback and its version limits. Passing local checks alone does not establish successful deployment or client connectivity.

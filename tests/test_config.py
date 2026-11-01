@@ -46,6 +46,12 @@ class ConfigTests(unittest.TestCase):
         c = self.parse({"SERVER_IP": "8.8.8.8"})
         self.assertEqual(c["NODE_NAME"], "MyNode")
         self.assertEqual(c["SUB_PORT"], 2096)
+        self.assertEqual(c["SUB_BACKEND_PORT"], 12096)
+
+    def test_subscription_backend_port_can_be_overridden(self):
+        c = self.parse(dict(self.data, SUB_BACKEND_PORT=32096))
+        self.assertEqual(c["SUB_BACKEND_PORT"], 32096)
+        self.assertEqual(c["SUB_PORT"], 2096)
 
     def test_public_domain_panel(self):
         c = self.parse(dict(self.data, SUB_DOMAIN="Node.Example.Com", PANEL_HTTPS=True))
@@ -97,6 +103,8 @@ class ConfigTests(unittest.TestCase):
     def test_strict_json_types(self):
         invalid = (("PANEL_HTTPS", "false"), ("PANEL_HTTPS", 0), ("NODE_PORT", "443"),
                    ("NODE_PORT", True), ("NODE_PORT", 443.0), ("ISP_PORT", "1080"),
+                   ("SUB_BACKEND_PORT", "12096"), ("SUB_BACKEND_PORT", True),
+                   ("SUB_BACKEND_PORT", 12096.0),
                    ("TOTAL_MONTHLY_GB", "1000"), ("TOTAL_MONTHLY_GB", True),
                    ("NODE_NAME", 12), ("ISP_PASSWORD", None), ("SUB_DOMAIN", []))
         for key, value in invalid:
@@ -105,7 +113,12 @@ class ConfigTests(unittest.TestCase):
 
     def test_invalid_ports_and_conflicts(self):
         for key, value in (("NODE_PORT", 0), ("NODE_PORT", 65536), ("NODE_PORT", -1),
-                           ("NODE_PORT", 80), ("NODE_PORT", 7777), ("PANEL_PORT", 2096)):
+                           ("NODE_PORT", 80), ("NODE_PORT", 7777), ("PANEL_PORT", 2096),
+                           ("SUB_BACKEND_PORT", 0), ("SUB_BACKEND_PORT", 65536),
+                           ("SUB_BACKEND_PORT", -1), ("SUB_BACKEND_PORT", 80),
+                           ("SUB_BACKEND_PORT", 443), ("SUB_BACKEND_PORT", 7777),
+                           ("SUB_BACKEND_PORT", 2096), ("NODE_PORT", 12096),
+                           ("PANEL_PORT", 12096), ("SUB_PORT", 12096)):
             with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
                 self.parse(dict(self.data, **{key: value}))
 
