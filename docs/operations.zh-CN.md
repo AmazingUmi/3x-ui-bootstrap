@@ -1,216 +1,227 @@
 # 操作指南
 
-[English](operations.md) | 简体中文 · [项目首页](../README.md) · [安全说明](security.zh-CN.md) · [参数配置](configuration.zh-CN.md)
+[English](operations.md) | 简体中文 · [项目首页](../README.zh-CN.md) · [参数配置](configuration.zh-CN.md) · [安全说明](security.zh-CN.md)
 
-本指南用于全新 VPS 的安装、验收和日常维护。脚本不会迁移已有 3x-ui 或 Nginx 部署；同版本安装中断后，可以保留状态继续执行。
+本指南涵盖全新 VPS 部署、客户端导入、日常维护以及常见故障排查。
 
-## 新机部署
+> **适用范围**：本工具面向全新 Ubuntu / Debian VPS，不会迁移已有的 3x-ui 或 Nginx 部署。如果安装或变更配置过程中意外中断，请保留状态目录并直接重新执行同一命令即可安全续跑。
 
-### 1. 准备服务器和配置
+---
 
-服务器要求：Ubuntu 22.04+ 或 Debian 12+、systemd、Python 3.10+、amd64 或 arm64，以及静态公网 IPv4。准备可用的 SSH 登录方式和 sudo 权限。
+## 全新 VPS 部署
 
-在本机项目目录中，首次创建配置；已有 `config.json` 时直接编辑，保留其中的账号信息：
+### 1. 服务器要求
 
-~~~bash
+- **系统**：Ubuntu 22.04+ 或 Debian 12+（带 `systemd` 与 Python 3.10+）
+- **架构**：`amd64`（`x86_64`）或 `arm64`（`aarch64`）
+- **网络**：静态公网 IPv4 地址
+- **权限**：可用的 SSH 登录方式及 `sudo` 权限
+
+### 2. 在本地准备并校验 `config.json`
+
+在本地项目目录中生成配置文件（仅在不存在时复制模板，避免覆盖已有凭据或配置）：
+
+```bash
 test -f config.json || cp config.example.json config.json
 chmod 600 config.json
 nano config.json
 bash ./install-3x-ui.sh --config ./config.json --validate-config
-~~~
+```
 
-默认 Direct 线路、SSH 面板、不限流量时，只需填写 `SERVER_IP`。选择 ISP 线路时还需填写上游账号；开启公网 HTTPS 面板时必须填写域名。字段含义和完整示例见[参数配置](configuration.zh-CN.md)。
+使用默认选项（`direct` 直连、SSH 隧道管理面板、不限流量）时，只需填写 `SERVER_IP` 即可安装。启用 ISP 线路需要上游代理凭据；启用 `PANEL_HTTPS=true` 需要填写域名 `SUB_DOMAIN`。完整字段与示例见[参数配置](configuration.zh-CN.md)。
 
-`--validate-config` 只检查本地配置格式与逻辑，无需 sudo 或网络；通过不代表 DNS、上游代理或公网连接已可用。
+`--validate-config` 会在本地检查 JSON 语法、字段类型、端口冲突与模式约束，无需 `sudo` 或联网。
 
-### 2. 配置 DNS 和防火墙
+### 3. 配置域名解析与防火墙
 
-使用域名时，将 `SUB_DOMAIN` 的 A 记录直接指向 `SERVER_IP`，关闭该记录的 CDN 代理，等待公共 DNS 解析一致。域名留空时，订阅使用公网 IP 的 HTTPS 证书，面板通过 SSH 隧道访问。
+如果填写了 `SUB_DOMAIN`，请将其 `A` 记录直接指向 `SERVER_IP`，关闭 CDN 代理（仅 DNS 解析），等待解析生效。如果留空 `SUB_DOMAIN`，订阅将自动使用公网 IPv4 申请 HTTPS 证书。
 
-同时检查云防火墙和服务器防火墙。脚本只输出端口清单，不自动修改防火墙或 SSH 设置。
+脚本不会自动修改防火墙或 SSH 设置，请在**云控制台安全组**和**服务器本机防火墙**中同时核对以下端口：
 
-| 默认 TCP 端口 | 用途 | 公网规则 |
+| 默认 TCP 端口 | 用途 | 放行规则 |
 | --- | --- | --- |
-| 实际 SSH 端口，常见为 22 | 登录、上传、SSH 隧道 | 保留管理连接 |
-| 80 | 证书申请和自动续期 | 保持可达 |
-| 443 | Direct / ISP 共享节点入站 | 放行 |
-| 38443 | Nginx HTTPS 订阅入口 | 放行 |
-| 7777 | 公网 HTTPS 面板 | 默认不放行；仅显式选择 `PANEL_HTTPS=true` 时公开 |
-| 12096 | 本机订阅后端 | 不开放公网，仅监听 `127.0.0.1` |
+| SSH 端口（常见为 `22`） | 远程管理及 SSH 面板隧道 | 保持放行 |
+| `80` | Let's Encrypt 证书申请与自动续期 | 放行公网 |
+| `443` | Direct / ISP 共享节点入站（`NODE_PORT`） | 放行公网 |
+| `38443` | Nginx HTTPS 订阅入口（`SUB_PORT`） | 放行公网 |
+| `7777` | 管理面板端口（`PANEL_PORT`） | 默认**不要放行**；仅开启 `PANEL_HTTPS=true` 时放行 |
+| `12096` | 内部订阅后端（`SUB_BACKEND_PORT`） | **严禁放行**（仅监听 `127.0.0.1`） |
 
-修改端口后，以配置校验输出为准。默认 SSH 面板无需开放 7777；Direct 和 ISP 共用 `NODE_PORT`，不需要另开 ISP 入站端口。
+若自定义了端口，请以 `--validate-config` 输出的端口清单为准。`direct+isp` 模式下两条线路共用 `NODE_PORT`，无需额外开放 ISP 入站端口。
 
-### 3. 上传和安装
+### 4. 上传脚本、预检并安装
 
-在本机项目目录执行，替换 SSH 用户名和新机 IP；上传当前要测试或部署的脚本版本：
+在本地终端上传 `install-3x-ui.sh` 与 `config.json` 并登录 VPS（将 `ubuntu` 和 `YOUR_VPS_IP` 替换为实际值）：
 
-~~~bash
+```bash
 scp ./install-3x-ui.sh ./config.json ubuntu@YOUR_VPS_IP:~/
 ssh ubuntu@YOUR_VPS_IP
-~~~
+```
 
-先安装发行版的系统安全更新，按需重启并核对运行内核。`--check` 会报告系统、内核、待重启标记和 SSH 基础认证配置；它不会自动更新系统或认证 CVE 已修复。确认 SSH 密钥登录可用后再关闭密码认证，不要依赖动态来源 IP 白名单。
+建议在部署前先安装系统安全更新并确认 SSH 密钥登录正常。
 
-在 VPS 上先执行预检：
+在 VPS 上执行安装前预检：
 
-~~~bash
+```bash
 chmod 600 ~/config.json
 sudo bash ~/install-3x-ui.sh --config ~/config.json --check
-~~~
+```
 
-预检通过后安装：
+`--check` 会检查系统环境、端口占用、ISP 上游连通性与出口 IP（如已启用）、DNS 解析、REALITY 伪装目标支持（TLS 1.3 / HTTP/2）以及证书条件，不会安装软件或修改系统服务。
 
-~~~bash
+预检通过后执行安装：
+
+```bash
 sudo bash ~/install-3x-ui.sh --config ~/config.json --install
-~~~
+```
 
-`--check` 检查系统、端口占用、ISP、DNS、REALITY 目标和证书条件，不安装软件或修改服务。`--install` 安装组件、申请证书、配置节点与订阅入口，并执行服务端检查。
+`--install` 会安装必要依赖并校验上游发行包 SHA-256 摘要、自动申请 TLS 证书、初始化随机管理员凭据、配置 Xray 节点与 Nginx 订阅网关（`3x-ui-subscription.service`），并完成本地连通性验证。
 
-订阅由独立的 `3x-ui-subscription.service` 管理。发行版默认 `nginx.service` 被屏蔽是预期行为，80 端口留给 Certbot 的独立验证服务。
+> **说明**：安装过程会自动屏蔽系统默认的 `nginx.service`，由独立的 `3x-ui-subscription.service` 专职托管订阅网关，同时让 `80/TCP` 保持空闲以供 Certbot 自动验证使用。
 
-### 4. 访问面板、导入订阅
+### 5. 打开管理面板并导入订阅
 
-安装结束会输出账号、完整面板地址、Mihomo / Shadowrocket 订阅和 VLESS 链接。之后可在 VPS 再次查看：
+安装完成后，终端会输出随机生成的面板账号、密码、访问地址、Mihomo / Shadowrocket 订阅链接以及 VLESS 链接。之后可随时在 VPS 上运行以下命令查看：
 
-~~~bash
+```bash
 sudo bash ~/install-3x-ui.sh --show
-~~~
+```
 
-结果保存在 `/var/lib/3x-ui-bootstrap/result.txt`，仅 root 可读。完整订阅链接和安装输出应保密。
+结果同时保存在 `/var/lib/3x-ui-bootstrap/result.txt`（仅 `root` 可读）。完整订阅链接、二维码和 VLESS 链接均属于访问凭据，请妥善保密。
 
-默认 SSH 面板需要在本机另开终端建立隧道，以下命令使用默认面板端口：
+#### 访问管理面板
 
-~~~bash
+在默认推荐配置（`PANEL_HTTPS=false`）下，面板仅监听 `127.0.0.1`。请在本地电脑**另开一个终端**建立 SSH 隧道（如修改过 `PANEL_PORT`，请同步替换第二个 `7777`）：
+
+```bash
 ssh -N -o ExitOnForwardFailure=yes \
   -L 127.0.0.1:17777:127.0.0.1:7777 ubuntu@YOUR_VPS_IP
-~~~
+```
 
-保持隧道运行，再打开安装结果给出的 `http://127.0.0.1:17777/` 后带随机路径的完整 URL。公网 HTTPS 面板直接使用结果中的 HTTPS URL。
+保持该终端连接，然后在浏览器打开安装结果给出的完整 `http://127.0.0.1:17777/<随机路径>/` 地址。如果开启了 `PANEL_HTTPS=true`，直接打开结果中的 `https://...` 地址即可。
 
-在对应客户端导入本次安装生成的订阅。双线路会输出 `<昵称>-Direct` 和 `<昵称>-ISP`：两者连接同一 VPS 端口，使用不同 UUID 和订阅 ID。浏览器打开有效订阅会下载数据，不显示订阅展示页。
+#### 导入客户端订阅
 
-## 安装后验收
+- 将结果中的 **Mihomo** 或 **Shadowrocket** HTTPS 订阅链接导入对应客户端（也可直接导入 VLESS 节点链接）。
+- 双线路（`direct+isp`）模式会生成 `<节点名>-Direct` 与 `<节点名>-ISP` 两组订阅和节点，两者连接同一 VPS 端口，使用独立的 UUID 与订阅 ID。
+- 直接在浏览器打开有效订阅 URL 会直接下载订阅数据，不会显示网页。
 
-在 VPS 检查服务与监听地址：
+---
 
-~~~bash
+## 部署后验证
+
+在 VPS 上检查服务运行状态和端口监听地址：
+
+```bash
 sudo systemctl status x-ui 3x-ui-subscription --no-pager
 sudo ss -lntp | grep -E ':(38443|12096)\b'
-~~~
+```
 
-使用默认端口时，应看到 Nginx 监听 `0.0.0.0:38443`，x-ui 仅监听 `127.0.0.1:12096`。采用自定义端口时，相应替换命令中的数字。
+使用默认端口时，应看到 Nginx 监听 `0.0.0.0:38443`，`x-ui` 仅监听 `127.0.0.1:12096`。
 
-再从真实客户端完成以下检查：
+随后在客户端设备上进行实测（如需测试原始端点，请先关闭电脑本地代理或 TUN 接管）：
 
-1. 更新订阅成功，额度信息可以刷新。
-2. 分别使用 Direct / ISP 浏览网页；Direct 出口为 VPS IP，ISP 出口为供应商出口。
-3. 从本机访问订阅入口的 `/`、`/assets/`、`/sub/assets/`，应返回 404；完整有效订阅链接应正常下载。
+1. **订阅更新**：在 Mihomo 或 Shadowrocket 中更新订阅，确认节点列表与流量配额信息正常刷新。
+2. **出口分流**：分别切到 Direct 与 ISP 节点访问网页或查询 IP，确认 Direct 出口为 VPS IP、ISP 出口为上游供应商 IP。
+3. **网关隔离**：从外部访问订阅端口的 `/`、`/assets/` 与 `/sub/assets/`，均应返回 `404`；完整有效订阅链接则应正常返回订阅数据。
 
-节点连接默认走 443，订阅刷新默认走 38443，需要分别验证。服务端检查和 TCP 端口连通不能代替真实 VLESS 认证及客户端公网验收。桌面 TUN 可能接管探测连接，测试前核对实际网络路径。
-
-2026-11-17 用户确认 **0.4.0-rc.1** 部署可用；所选核心、客户端版本和分项验收结果未记录。
-
-2026-11-01 已收到 **0.3.0** 新机部署“正常使用”的用户反馈，并完成外部 IPv4 暴露复测，范围见[安全说明](security.zh-CN.md)。本次未记录客户端版本，不能扩展为所有版本的兼容性保证。
+---
 
 ## 日常维护
 
-以下命令在 VPS 执行。配置文件是待应用的设置，编辑文件本身不会修改正在运行的服务。
+以下命令均在 VPS 上执行。仅编辑 `config.json` 不会改变运行中的服务，需执行对应的维护命令使其生效：
 
 | 操作 | 命令 |
 | --- | --- |
-| 查看账号、面板及订阅链接 | `sudo bash ~/install-3x-ui.sh --show` |
-| 查询客户端原生月流量 | `sudo bash ~/install-3x-ui.sh --traffic-status` |
-| 临时诊断 REALITY 握手 | `sudo bash ~/install-3x-ui.sh --diagnose` |
-| 应用域名、HTTPS 面板和邮箱设置 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain` |
-| 应用昵称、模式、ISP 和配额设置 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes` |
-| 只调整月配额，保留原部署重置日 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic` |
-| 切换固定 Xray 核心 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core` |
-| 修复已部署节点的 REALITY 目标 | `sudo bash ~/install-3x-ui.sh --repair-reality-target` |
+| 查看面板账号、访问地址与订阅链接 | `sudo bash ~/install-3x-ui.sh --show` |
+| 查询客户端原生月流量用量 | `sudo bash ~/install-3x-ui.sh --traffic-status` |
+| 使用临时本地实例诊断 REALITY 握手 | `sudo bash ~/install-3x-ui.sh --diagnose` |
+| 应用 `SUB_DOMAIN`、`PANEL_HTTPS`、`ACME_EMAIL` 变更 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain` |
+| 应用 `NODE_NAME`、`NODE_MODE`、`ISP_*` 与配额变更 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes` |
+| 仅调整月流量配额（保留原有重置日） | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic` |
+| 切换配置文件指定的 Xray-core 版本 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core` |
+| 将 REALITY 伪装目标修复为 `www.cloudflare.com` | `sudo bash ~/install-3x-ui.sh --repair-reality-target` |
 
-`--show`、`--traffic-status`、`--diagnose` 和 `--repair-reality-target` 使用服务器保存的部署，不需要配置文件。三个 `--configure-*` 命令各有更新范围，详见[参数配置](configuration.zh-CN.md)；服务配置变更可能短暂中断连接，完成后按输出更新客户端。
+- `--show`、`--traffic-status`、`--diagnose` 和 `--repair-reality-target` 读取服务器已保存的状态，无需提供 `--config`。
+- `--configure-traffic` 后面不接数字：请直接修改完整 `config.json` 中的 `TOTAL_MONTHLY_GB` 和 `ISP_MONTHLY_GB`（单位 GiB）后再运行该命令，已用流量计数和原部署重置日均会保留。
+- `--diagnose` 仅在 `127.0.0.1` 启动临时测试进程，不会更改现有服务、数据库或正式节点配置。
+- 若曾在 3x-ui 面板网页端手工修改过 ISP 上游账号，请先同步更新 `config.json`，再执行 `--configure-nodes`。请勿手动修改受管订阅 ID、路径或监听端口，以免与 Nginx 白名单规则不一致。
 
-`--configure-traffic` 后不接数字。先在原完整 JSON 配置中修改 `TOTAL_MONTHLY_GB` 和 `ISP_MONTHLY_GB`，再执行上表命令。单位为 GiB；双线路有限总预算时，须满足 `0 < ISP_MONTHLY_GB < TOTAL_MONTHLY_GB`，Direct 分配剩余额度。已有用量和原重置日保持不变。
+---
 
-`--diagnose` 使用临时回环副本，不更改现有节点或服务，也不复现正式 ISP 出站。`--repair-reality-target` 会修改正式部署，适合诊断已确认目标异常后使用。
+## 切换 Xray-core 版本
 
-通过面板手动修改 ISP 账号后，先同步私有配置；不要用旧参数运行 `--configure-nodes`。受管订阅 ID、路径、监听地址应由脚本维护，以免与 Nginx 白名单不一致。
+安装器默认部署 Xray-core `26.10.31`。如旧版本客户端遇到 TLS 或 REALITY 握手兼容问题，可通过配置切换到内置校验的 `26.6.27` 版本，也可随时切回最新版。
 
-## 新旧 Xray 对照测试
+修改 `config.json` 中的 `"XRAY_VERSION": "26.6.27"`（或 `"26.10.31"`），然后执行：
 
-默认 `XRAY_VERSION` 为 `26.10.31`。在本候选版的新部署上，把完整配置中的此字段改为 `26.6.27` 后执行：
-
-~~~bash
+```bash
 sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core
-~~~
+```
 
-恢复新版时改回 `26.10.31` 并运行同一命令。命令会先校验新旧发行包，再短暂停止服务、替换核心并进行服务端验收；失败时尝试恢复旧核心并重新验收。自动回退成功和回退未完成会分别报告。中断后用相同目标版本续跑，不删除 `core-change.json`。此命令不升级面板、不还原数据库，也不重置客户端身份、配额或部署日。
+**切换流程说明：**
+1. 停止服务前先下载并校验目标版本与当前版本的 SHA-256 摘要，确保回退无忧。
+2. 短暂停止服务、替换核心、校验配置并启动服务进行运行检查。
+3. 若新核心未通过服务端检查，会自动回退至原版本；数据库、节点 UUID、订阅链接、已有流量计数与重置日均保持不变。
 
-服务端通过不代表 iPhone 已通过；仍需分别测试 Shadowrocket 和 Mihomo，记录应用版本、TLS 指纹、Wi-Fi／蜂窝网络、Direct／ISP 出口、重连和订阅额度刷新。若只是手机不能连，自动检查无法感知，需手动选择对照版本。旧核心不作为长期安全推荐。不要在面板内自动更新核心，不支持任意版本或旧部署迁移。
+> **建议**：切换版本后请重新在客户端验证 Wi-Fi / 蜂窝网络、Direct / ISP 出口和订阅刷新。请勿直接在 3x-ui 面板界面中更新 Xray 核心，以免破坏脚本状态校验；日常使用建议保持默认的 `26.10.31` 以获取最新安全修复。
 
-## 证书和服务排查
+---
 
-先在 VPS 查看当前服务、监听与日志：
+## 查看服务状态与证书续期
 
-~~~bash
+查看服务状态、端口监听、系统防火墙及近期日志：
+
+```bash
 sudo systemctl status x-ui 3x-ui-subscription --no-pager
 sudo ss -lntp
 sudo ufw status verbose
 sudo journalctl -u x-ui -n 80 --no-pager
 sudo journalctl -u 3x-ui-subscription -n 80 --no-pager
-~~~
+```
 
-同时检查云防火墙。`ufw inactive` 只表示 UFW 未启用，不能说明云防火墙已经放行。分享日志前先脱敏，处理范围见[安全说明](security.zh-CN.md)。
+> 说明：`ufw status: inactive` 仅表示服务器本机 UFW 未开启，并不代表云厂商安全组已放行对应端口。分享日志前请先脱敏敏感信息，详见[安全说明](security.zh-CN.md)。
 
-Nginx 与证书续期检查：
+检查 Nginx 网关配置语法与 Certbot 自动续期定时器：
 
-~~~bash
+```bash
 sudo /usr/sbin/nginx -t -c /var/lib/3x-ui-bootstrap/nginx.conf
 sudo systemctl status 3x-ui-cert-renew.timer --no-pager
 sudo journalctl -u 3x-ui-cert-renew.service -n 80 --no-pager
-~~~
+```
 
-必须用 `-c` 指定受管配置；默认 Nginx 配置不是订阅配置。证书续期后会重载或启动订阅网关，开启公网 HTTPS 面板时还会重启 x-ui。
+手动执行 `nginx -t` 时必须通过 `-c /var/lib/3x-ui-bootstrap/nginx.conf` 指定受管配置。证书续期成功后，hook 会自动校验 TLS 证书与 Nginx 配置并重载 `3x-ui-subscription`（若开启了 `PANEL_HTTPS=true`，也会重启 `x-ui` 加载新证书）。请始终在防火墙中保持 `80/TCP` 可达，以确保自动续期顺利完成。
 
-80 端口必须保留证书验证所需的公网规则，但平时不要求有常驻监听进程。订阅后端使用本机 HTTP，不需要自己的公网证书。不要用开放 12096 的方式处理订阅故障。
+---
 
-## 常见问题
+## 常见问题排查
 
 ### 配置校验失败
+重新运行 `--validate-config` 查看具体报错行号或字段提示。请确认配置文件为纯 UTF-8 JSON（不含注释），端口号为整数、`PANEL_HTTPS` 为布尔值 `true` / `false`（不加引号），且文件权限已设为 `600`（`chmod 600 config.json`）。
 
-重新执行 `--validate-config`，确认 JSON 无注释、端口为数字、布尔值为 `true` / `false`，且文件权限为 600。它只验证格式与逻辑；DNS、ISP 和系统条件由 VPS 上的 `--check` 验证。
+### 域名仍解析到旧 IP
+检查权威 DNS 的 `A` 记录及公共 DNS 返回值，确认已关闭 CDN 代理，并等待旧记录的 TTL 过期。
 
-### 域名仍指向旧 IP
+### 面板或订阅链接无法访问
+使用 `sudo bash ~/install-3x-ui.sh --show` 核对完整 URL 的协议、端口、随机路径与订阅 ID：
+- **SSH 面板**：确认本地 `ssh -N -L ...` 隧道终端仍在运行。
+- **公网 HTTPS 面板**：确认云防火墙和系统防火墙已放行 `PANEL_PORT`（默认 `7777/TCP`）。
+- **订阅链接**：确认已放行 `SUB_PORT`（默认 `38443/TCP`），并通过 `journalctl -u 3x-ui-subscription` 查看日志。
 
-核对权威 DNS 的 A 记录和公共 DNS 返回值，关闭该记录的 CDN 代理，等待 TTL 过期与解析同步。清理 VPS 本地缓存不能强制公共递归 DNS 提前刷新。
+### 访问订阅根路径（`/`）或 `/assets/` 返回 404
+这是正常的安全策略。Nginx 订阅网关仅放行完整的有效下载路径，故意拦截根路径、静态资源、无效 ID 和查询参数（如 `?html=1`）。请直接在客户端中使用完整的 `/mihomo/<id>` 或 `/sub/<id>` 链接更新订阅。
 
-### 面板或订阅无法访问
+### `direct+isp` 模式下只有一条线路可用
+在面板中检查对应客户端的剩余配额、启用状态、UUID 及路由规则。双线路共用同一个 VLESS + REALITY 入站，必须通过“入站标签 + 客户端 email（`user`）”将流量分别指向 `direct` 与 `bootstrap-isp`。另外，ISP 线路默认阻断 UDP，且上游代理故障时不会回退到 Direct。
 
-核对完整 URL 的协议、端口、随机路径与订阅 ID。SSH 面板需要已建立的隧道；公网 HTTPS 面板需要放行面板端口。订阅更新失败时单独检查 38443 的网关服务与 DNS。
+### ISP 预检通过，但客户端连不上
+请分段排查：客户端到 VPS `NODE_PORT` 的公网连通性、面板中 `bootstrap-isp` 出站配置以及路由匹配规则，同时测试 Wi-Fi 与蜂窝网络。如曾在面板内手工修改过 `bootstrap-isp`，请确保入站标签、客户端 email 和用户路由未被更改并保存应用配置。
 
-### 订阅首页或静态资源返回 404
+### Shadowrocket 无法连接
+- 使用 `sudo bash ~/install-3x-ui.sh --show` 核对当前 Xray 版本，并检查节点 UUID、`flow=xtls-rprx-vision`、REALITY 公钥（`pbk`）、SNI、Short ID（`sid`）、服务器 IP 与端口是否一致。
+- 新版 Xray REALITY 握手要求客户端支持 `X25519MLKEM768` 密钥交换，请保持 Shadowrocket 为较新版本，在节点 TLS 设置中核对实际生效的指纹，并将 `minClientVer` 留空。
+- 若使用旧版 Shadowrocket（如 `2.2.92`），可在 `config.json` 中将 `XRAY_VERSION` 设为 `"26.6.27"` 后执行 `--switch-core`，并在 Wi-Fi 与蜂窝网络下分别复测。
+- 参考资料：[Xray REALITY 配置说明](https://docs.sanaei.dev/zh/docs/config/reality/)、[Shadowrocket 2.2.93 开发说明](https://t.me/s/ShadowrocketNews?before=1642)。
 
-这是预期行为。只接受完整有效的下载链接，不接受首页、静态资源、无效 ID 或附加查询参数。请直接在客户端更新订阅；不要用首页是否显示网页判断服务是否正常。
-
-### Direct / ISP 只有一条线路可用
-
-检查对应客户端的配额、启用状态、UUID 和路由。两条线路共用一个 VLESS + REALITY 入站，路由必须同时匹配入站标签与客户端 email（`user`），分别指向 `direct` 和 `bootstrap-isp`；只按共享入站标签无法区分两条线路。
-
-ISP 的 UDP 被阻断，上游失败不会自动回退 Direct。配额独立计量，一条线路用尽额度不会自动耗用另一条线路的配额。修改客户端显示名称也不会改变出口。
-
-### ISP 出站测试通过，客户端仍不通
-
-分别确认上游代理、正式入站的认证及转发、客户端到 VPS 的公网连接。切换 Wi-Fi / 蜂窝网络对照，必要时检查对应连接的数据包。面板中修改 `bootstrap-isp` 后，应保留入站标签、客户端 email 和用户路由，并保存应用设置；不要先重装。
-
-### Shadowrocket 连接失败
-
-历史明确验证的组合是 **Shadowrocket 2.2.92（3345）+ Xray-core 26.6.27**，来自此前双入站部署。0.3.0 的后续部署反馈未记录客户端版本；这些记录均不代表 0.4.0-rc.1 或新版核心已经通过真机验收。
-
-核对实际核心与保存的 `XRAY_VERSION` 一致，并核对 UUID、Vision flow、REALITY 公钥、SNI、Short ID、地址及端口。新版 REALITY 要求握手携带 X25519MLKEM768；在 Shadowrocket 的节点 TLS 配置里检查实际指纹，不能把链接里的 `fp=chrome` 当作已兼容的证明。`minClientVer` 留空，不能靠任意降低版本限制解决所有指纹问题。升级或重新订阅后重新验证 Wi-Fi、蜂窝网络、出口、重连和额度刷新。
-
-参考：[Xray REALITY 配置](https://docs.sanaei.dev/zh/docs/config/reality/)、[Shadowrocket 2.2.93 开发记录](https://t.me/s/ShadowrocketNews?before=1642)。
-
-### 安装或配置修改中断
-
-保留 `/var/lib/3x-ui-bootstrap`、数据库和私有日志，修复原因后使用同一配置及原命令重试。域名、节点或目标修复中断时，分别继续对应的 `--configure-domain`、`--configure-nodes` 或 `--repair-reality-target`；不要删除状态后重新安装。
-
-中断续跑只适用于本版受管部署。若检测到其他版本或手工安装残留，请在全新 VPS 部署，不在旧机上迁移。
+### 安装或配置变更过程中意外中断
+请**不要**删除 `/var/lib/3x-ui-bootstrap` 目录或清空重试。可查看 `/var/lib/3x-ui-bootstrap/install.log` 定位原因并修复（例如防火墙或 DNS 问题），随后使用同一份 `config.json` 重新执行原命令（`--install`、`--configure-domain`、`--configure-nodes`、`--switch-core` 或 `--repair-reality-target`）即可安全续跑。

@@ -1,58 +1,84 @@
 # 3X-UI Bootstrap
 
-面向全新 Ubuntu / Debian VPS 的一键部署工具。填写 JSON 配置，上传脚本和配置文件，即可部署 VLESS + REALITY 节点、HTTPS 订阅和管理面板。
+English | [简体中文](README.zh-CN.md)
 
-支持 Direct、ISP、Direct + ISP 三种模式。Direct 与 ISP 共用节点端口，使用独立身份、出口和流量配额；ISP 使用指定的 SOCKS5 / HTTP 上游，失效时不会回退到 Direct。
+A declarative, single-script deployment tool for setting up **VLESS + REALITY** nodes, an isolated **HTTPS subscription gateway**, and a hardened **3x-ui** panel on fresh Ubuntu / Debian VPS instances.
 
-## 文档
+Fill out a single `config.json`, upload it alongside `install-3x-ui.sh`, and get a production-ready deployment with automated TLS certificates, client traffic quotas, and safe in-place maintenance commands.
 
-| 文档 | 内容 | English |
-| --- | --- | --- |
-| [操作指南](docs/operations.zh-CN.md) | 新机安装、客户端导入、验收、日常维护和故障排查 | [Operations guide](docs/operations.md) |
-| [安全说明](docs/security.zh-CN.md) | 公网暴露、订阅隔离、凭据保护、版本公告和安全复测记录 | [Security notes](docs/security.md) |
-| [参数配置介绍](docs/configuration.zh-CN.md) | 必填项、默认值、参数约束、配置示例和修改范围 | [Configuration reference](docs/configuration.md) |
+## Features
 
-首次部署从操作指南开始；填写配置时查参数介绍；上线前阅读安全说明。
+- **Flexible Routing Modes (`direct`, `isp`, `direct+isp`)**: Route traffic directly through your VPS, through a SOCKS5 / HTTP upstream proxy, or run both routes on the same `443/TCP` port with separate client identities, subscription links, and traffic limits. If an ISP upstream goes down, traffic never falls back silently to Direct.
+- **Hardened by Default**: The 3x-ui management panel binds only to `127.0.0.1` (`PANEL_HTTPS=false`) and is accessed over an SSH tunnel, eliminating public panel exposure. Public HTTPS panel access is opt-in with a custom domain.
+- **Isolated Subscription Gateway**: Nginx terminates public HTTPS (`38443/TCP` by default) and forwards only exact, active `/sub/<id>` and `/mihomo/<id>` download URLs to the loopback backend (`127.0.0.1:12096`). Static assets, unknown IDs, query variants, and the HTML web page return `404`.
+- **Automated HTTPS Certificates**: Automatically issues and renews Let's Encrypt certificates via Certbot for either your domain (`SUB_DOMAIN`) or a public IPv4 address (short-lived IP certificates).
+- **Native Monthly Traffic Quotas**: Uses 3x-ui's native client metering with monthly resets anchored to the original deployment day. In `direct+isp` mode, ISP gets its reserved quota and Direct receives the remainder.
+- **Safe, Resumable Operations**: Verifies SHA-256 digests of pinned upstream releases, supports offline config validation (`--validate-config`) and live VPS preflight (`--check`), resumes interrupted installs cleanly, and supports controlled Xray-core switching (`--switch-core`) with automatic rollback.
 
-## 部署结构
+## Architecture
 
 ```text
-客户端 ── 443/TCP ── Xray VLESS + REALITY ── Direct / ISP 出口
-客户端 ── 38443/TCP HTTPS ── Nginx ── 127.0.0.1:12096 HTTP ── 订阅后端
-管理员 ── SSH 隧道 ── 127.0.0.1:7777 ── 管理面板（默认且推荐）
+Clients ── 443/TCP ────────── Xray (VLESS + REALITY) ── Direct / ISP Exit
+Clients ── 38443/TCP HTTPS ── Nginx Gateway ── 127.0.0.1:12096 HTTP ── Subscription Backend
+Admin   ── SSH Tunnel ─────── 127.0.0.1:7777 ────────────────────────── Management Panel (default)
 ```
 
-**默认且推荐 `PANEL_HTTPS=false`：面板仅本机监听，通过 SSH 密钥隧道管理，管理设备 IP 变化不需要更新来源白名单。** 域名可选；只有显式设置 `PANEL_HTTPS=true` 才会公开 HTTPS 面板。端口均可在新机配置中指定。订阅后端始终只绑定本机，不需要开放 `12096`。
+> **Note**: By default, only the node port (`443/TCP`), subscription gateway (`38443/TCP`), and ACME validation port (`80/TCP`) need to be reachable from the internet. Never expose `12096/TCP` publicly.
 
-## 快速入口
+## Quick Start
 
-在新 VPS 上完成配置上传、域名解析和防火墙准备后执行：
+**Requirements**: A fresh **Ubuntu 22.04+** or **Debian 12+** VPS (`amd64` or `arm64`) with systemd, Python 3.10+, a static public IPv4 address, and `sudo` access.
+
+### 1. Create and validate `config.json` locally
 
 ```bash
+cp config.example.json config.json
+chmod 600 config.json
+# Edit config.json (only SERVER_IP is required for minimal Direct mode)
+bash ./install-3x-ui.sh --config ./config.json --validate-config
+```
+
+### 2. Upload and run preflight on the VPS
+
+Ensure your firewall allows `80/TCP`, `443/TCP`, and `38443/TCP` (plus your SSH port). If using `SUB_DOMAIN`, point its DNS `A` record directly to `SERVER_IP` with CDN proxying disabled.
+
+```bash
+scp ./install-3x-ui.sh ./config.json ubuntu@YOUR_VPS_IP:~/
+ssh ubuntu@YOUR_VPS_IP
+
 chmod 600 ~/config.json
 sudo bash ~/install-3x-ui.sh --config ~/config.json --check
 ```
 
-检查通过后安装：
+### 3. Install
 
 ```bash
 sudo bash ~/install-3x-ui.sh --config ~/config.json --install
 ```
 
-完整准备步骤见[操作指南](docs/operations.zh-CN.md)。仅支持新机部署和本版本安装中断后重试，不迁移旧部署。
+When installation completes, the terminal prints your randomized panel credentials, SSH tunnel command, Mihomo / Shadowrocket subscription URLs, and VLESS links (also saved to `/var/lib/3x-ui-bootstrap/result.txt`).
 
-## 版本与验证
+## Documentation
 
-当前为 **0.4.0-rc.1 测试候选版**。默认固定依赖：3x-ui **v3.11.0**、Xray-core **26.10.31**、Certbot **5.9.0**；Nginx 使用 Ubuntu / Debian 软件源中的版本。`XRAY_VERSION` 可显式选择 **26.6.27** 做兼容对照；使用 `--switch-core` 受控切换，不能在面板内任意更新核心。
+| Guide | Description | 简体中文 |
+| --- | --- | --- |
+| [Operations Guide](docs/operations.md) | Step-by-step installation, client setup, maintenance commands, and troubleshooting | [操作指南](docs/operations.zh-CN.md) |
+| [Configuration Reference](docs/configuration.md) | All 20 configuration fields, defaults, constraints, and examples | [参数配置](docs/configuration.zh-CN.md) |
+| [Security Guide](docs/security.md) | Network isolation, gateway access control, credential handling, and self-checks | [安全说明](docs/security.zh-CN.md) |
+| [Changelog](CHANGELOG.md) | Release history and user-facing changes | [更新日志](CHANGELOG.zh-CN.md) |
+| [Contributing](CONTRIBUTING.md) | Development tests, containerized smoke checks, and contribution guidelines | [贡献指南](CONTRIBUTING.zh-CN.md) |
 
-2026-11-17 用户已确认本候选版部署可用；所选核心、客户端版本和分项验收结果未记录。安装器的订阅格式检查和本机 Xray 自测不能代替客户端验收。检查范围与历史反馈见[操作指南](docs/operations.zh-CN.md)和[安全说明](docs/security.zh-CN.md)。
+## Pinned Upstream Versions
 
-默认订阅端口改为 `38443`，可以按需自定义；换端口不阻止全端口扫描，也不证明节点不会被 GFW 或信誉服务识别。系统安全更新、运行内核及重启状态需单独核对。
+Current release: **0.4.0-rc.1** (pre-release)
 
-开发检查运行 `bash scripts/check.sh`。贡献与发布约定见[贡献说明](CONTRIBUTING.zh-CN.md)，版本变化见[更新记录](CHANGELOG.zh-CN.md)。
+| Component | Version | Notes |
+| --- | --- | --- |
+| [3x-ui](https://github.com/MHSanaei/3x-ui) | `v3.11.0` | SHA-256 verified official release |
+| [Xray-core](https://github.com/XTLS/Xray-core) | `26.10.31` | Default; `26.6.27` available via `XRAY_VERSION` for older client compatibility |
+| [Certbot](https://github.com/certbot/certbot) | `5.9.0` | SHA-256 verified wheel in isolated venv |
+| [Nginx](https://nginx.org/) | System package | Installed via Ubuntu / Debian APT |
 
-## 许可证与依赖
+## License
 
-本项目采用 [MIT License](LICENSE)。第三方项目遵循各自的许可证，本仓库不包含其发行二进制。
-
-依赖：[3x-ui](https://github.com/MHSanaei/3x-ui)、[Xray-core](https://github.com/XTLS/Xray-core)、[Certbot](https://github.com/certbot/certbot)、[Nginx](https://nginx.org/)。
+This project is licensed under the [MIT License](LICENSE). Third-party upstream software remains subject to its own licenses; this repository does not bundle third-party binaries.

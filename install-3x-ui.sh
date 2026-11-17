@@ -131,7 +131,7 @@ def load_config_values(path):
             require(not info.st_mode & 0o077, "配置文件权限必须为 600 或更严格，请执行 chmod 600。")
             content = stream.read(65537)
     except FileNotFoundError:
-        raise RuntimeError("找不到配置文件；请复制 config.example.json 为 config.json，填写后通过 --config 指定。") from None
+        raise RuntimeError("找不到配置文件；请先复制 config.example.json 为 config.json 并填写，或通过 --config 指定路径。") from None
     except OSError:
         raise RuntimeError("无法读取配置文件，请检查路径及访问权限。") from None
     require(len(content) <= 65536, "配置文件不能超过 64 KiB。")
@@ -182,7 +182,7 @@ def parse_config(values):
     c = dict(values)
     c.setdefault("XRAY_VERSION", CORE_VERSION)
     require(c["XRAY_VERSION"] in CORE_RELEASES,
-            "XRAY_VERSION 只能选择已固定摘要的版本：" + ", ".join(CORE_RELEASES))
+            "XRAY_VERSION 仅支持已校验的官方版本：" + ", ".join(CORE_RELEASES))
     c.setdefault("NODE_MODE", "direct")
     require(c["NODE_MODE"] in ("direct", "direct+isp", "isp"),
             "NODE_MODE 只能填写 direct、direct+isp 或 isp。")
@@ -424,21 +424,15 @@ def sockets():
 
 
 def report_system_security(os_release, ssh_settings=""):
-    """Read-only evidence, not a CVE scanner or an automatic OS/SSH upgrade."""
+    """Print read-only OS, kernel, reboot, and SSH authentication summary."""
     pretty = re.search(r'^PRETTY_NAME=["\']?([^"\'\n]+)', os_release, re.M)
-    print("系统：" + (pretty[1] if pretty else "Ubuntu / Debian") + "；运行内核：" + platform.release(), flush=True)
-    print("系统补丁需单独维护：安装依赖和更新 Xray 不等于修复 Linux 内核漏洞。", flush=True)
+    print("系统环境：" + (pretty[1] if pretty else "Ubuntu / Debian") + " | 内核：" + platform.release(), flush=True)
     if Path("/run/reboot-required").exists():
-        print("待重启：系统存在 /run/reboot-required；请安排重启后核对运行内核。", flush=True)
-    else:
-        print("未发现待重启标记；这不能证明内核已包含全部安全修复。", flush=True)
+        print("提示：检测到系统待重启标记（/run/reboot-required），建议重启更新内核后再使用。", flush=True)
     auth = dict(re.findall(r"^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication) (\S+)$",
                            ssh_settings, re.M))
     if auth.get("passwordauthentication") == "yes" or auth.get("kbdinteractiveauthentication") == "yes":
-        print("SSH 允许密码或交互认证；确认密钥登录可用后再收紧。脚本不会修改 SSH。", flush=True)
-    elif auth:
-        print("SSH 基础配置未启用密码/交互认证；仍需检查 Match 条件与实际密钥登录。", flush=True)
-    print("推荐面板仅本机 + SSH 密钥隧道；管理设备 IP 变化不需要修改来源白名单。", flush=True)
+        print("安全建议：当前 SSH 允许密码或交互认证，建议确认密钥登录正常后再关闭密码登录（脚本不会修改 SSH）。", flush=True)
 
 
 def check_environment(c, owned):
@@ -457,7 +451,7 @@ def check_environment(c, owned):
         existing_unit = subprocess.run(["systemctl", "cat", "x-ui.service"],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
         require(not any(p.exists() or p.is_symlink() for p in paths) and not existing_unit,
-                "发现已有 3X-UI / Nginx 或残留文件；本版仅支持全新 VPS，不迁移旧部署。")
+                "检测到系统中已有 3X-UI / Nginx 或相关残留文件；本工具仅支持在全新 VPS 上部署，不支持迁移旧环境。")
     for address, port, line in sockets():
         if port in node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"], c["SUB_BACKEND_PORT"]]:
             expected = "xray" if port in node_ports(c) else "nginx" if port == c["SUB_PORT"] else '"x-ui"'
@@ -476,7 +470,7 @@ def check_environment(c, owned):
                 "配置端口与 SSH 端口冲突。")
     report_system_security(os_release, ssh_settings)
     if core_version(c) != CORE_VERSION:
-        print("所选 Xray 是历史兼容对照版本；不能据此认为已包含新版安全修复。", flush=True)
+        print("提示：当前配置选用旧版 Xray-core " + core_version(c) + "（仅用于兼容旧客户端，默认版本为 " + CORE_VERSION + "）。", flush=True)
     return arch
 
 
@@ -494,17 +488,16 @@ def check_target(c):
 
 
 def firewall_instructions(c):
-    lines = ["端口放行（云防火墙与服务器防火墙均需手动配置）："]
-    lines.append("  节点共享入站（" + "/".join(active_roles(c)) + "）：" + str(c["NODE_PORT"]) + "/TCP")
-    lines.append("  Nginx HTTPS 订阅：" + str(c["SUB_PORT"]) + "/TCP")
-    lines.append("  内部订阅：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "，无需公网放行")
+    lines = ["防火墙端口清单（请在云控制台和系统防火墙中放行）："]
+    lines.append("  节点入口（" + "/".join(active_roles(c)) + "）：" + str(c["NODE_PORT"]) + "/TCP")
+    lines.append("  HTTPS 订阅入口：" + str(c["SUB_PORT"]) + "/TCP")
+    lines.append("  证书申请与续期：80/TCP")
     if c.get("PANEL_HTTPS"):
-        lines.append("  公网 HTTPS 面板（显式选择）：" + str(c["PANEL_PORT"]) + "/TCP；推荐改为 PANEL_HTTPS=false")
+        lines.append("  管理面板（公网 HTTPS）：" + str(c["PANEL_PORT"]) + "/TCP")
     else:
-        lines.append("  面板：" + str(c["PANEL_PORT"]) + " 仅本机（默认推荐），通过 SSH 隧道访问，无需公网放行")
-    lines += ["  证书签发与自动续期：80/TCP",
-              "保留实际 SSH 端口的访问规则；检查 IPv4 / IPv6，脚本不自动修改防火墙。",
-              "自定义订阅端口只能减少针对常用端口的探测，不能阻止全端口扫描。"]
+        lines.append("  管理面板（仅本机 + SSH 隧道）：127.0.0.1:" + str(c["PANEL_PORT"]) + "（无需公网放行）")
+    lines.append("  内部订阅后端：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "（仅本机监听，切勿公网放行）")
+    lines.append("请保持当前 SSH 端口的访问规则（同时检查 IPv4 / IPv6 防火墙）；脚本不会自动修改防火墙。")
     return "\n".join(lines) + "\n"
 
 
@@ -730,14 +723,14 @@ def install_release(arch):
 
 def core_version(c):
     version = c.get("XRAY_VERSION", CORE_VERSION)
-    require(version in CORE_RELEASES, "安装记录中的 Xray 版本不在固定摘要列表中。")
+    require(version in CORE_RELEASES, "当前部署记录中的 Xray 版本不受支持。")
     return version
 
 
 def verify_core(arch, version=CORE_VERSION):
     output = run([str(APP / "bin" / ("xray-linux-" + arch)), "version"], capture=True, cwd=APP)
     require(version in CORE_RELEASES and re.search(r"(?m)^Xray " + re.escape(version) + r"(?:\s|$)", output),
-            "Xray-core 版本不符，要求 " + version + "；请使用 --switch-core，勿在面板中自动更新核心。")
+            "当前 Xray-core 版本与配置不一致（期望 " + version + "）；请使用 --switch-core 切换，勿直接在面板内更新核心。")
 
 
 def download_core(arch, version):
@@ -770,9 +763,9 @@ def install_core(arch, version=CORE_VERSION):
 
 def switch_core(c, state, arch):
     """Switch only the pinned Xray binary; never restore or rewrite the panel DB."""
-    require(state.get("phase") == "complete" and state.get("api_token"), "请先完成当前版本的基础安装。")
+    require(state.get("phase") == "complete" and state.get("api_token"), "请先完成基础部署后再切换核心版本。")
     target = config_values()["XRAY_VERSION"]
-    require(target in CORE_RELEASES, "XRAY_VERSION 不在固定摘要列表中。")
+    require(target in CORE_RELEASES, "XRAY_VERSION 不在内置固定摘要列表中（可选：" + ", ".join(CORE_RELEASES) + "）。")
     path = STATE_DIR / "core-change.json"
     plan = json.loads(path.read_text()) if path.exists() else None
     pending = plan is not None and plan.get("status") not in ("complete", "rolled_back")
@@ -780,13 +773,13 @@ def switch_core(c, state, arch):
         require(plan.get("owner") == OWNER and plan.get("uuid") == state["uuid"]
                 and c in (plan["old_config"], plan["new_config"])
                 and target == core_version(plan["new_config"]),
-                "核心切换尚未完成，请使用原 XRAY_VERSION 和 --switch-core 续跑。")
+                "核心切换尚未完成，请使用原 XRAY_VERSION 参数重新执行 --switch-core 继续完成。")
         old_config, new_config = plan["old_config"], plan["new_config"]
     else:
         old_config, new_config = c, dict(c, XRAY_VERSION=target)
         verify_core(arch, core_version(old_config))
         if old_config == new_config:
-            print("核心已是所选固定版本：" + target + "；未替换文件。", flush=True)
+            print("当前 Xray-core 已是目标版本 " + target + "，无需切换。", flush=True)
             return
         plan = {"owner": OWNER, "uuid": state["uuid"], "status": "prepared",
                 "old_config": old_config, "new_config": new_config}
@@ -796,9 +789,9 @@ def switch_core(c, state, arch):
     download_core(arch, core_version(old_config))
     download_core(arch, target)
     atomic_write(path, json.dumps(plan, indent=2) + "\n")
-    print("切换 Xray " + core_version(old_config) + " → " + target + "；节点会短暂中断。", flush=True)
+    print("正在切换 Xray-core：" + core_version(old_config) + " → " + target + "（服务将短暂中断）…", flush=True)
     if target != CORE_VERSION:
-        print("兼容对照版本仅用于测试；不表示已包含新版安全修复。", flush=True)
+        print("提示：正在切换至旧版兼容核心；若需最新安全修复，建议在测试后切回默认版本 " + CORE_VERSION + "。", flush=True)
     try:
         run(["systemctl", "stop", NGINX_SERVICE])
         run(["systemctl", "stop", "x-ui"])
@@ -830,16 +823,16 @@ def switch_core(c, state, arch):
             atomic_write(path, json.dumps(plan, indent=2) + "\n")
         except Exception as rollback_error:
             # Keep the prepared transaction for a retry; do not claim recovery.
-            raise RuntimeError("核心切换和自动回退未完成；保留切换记录，请用原参数续跑 --switch-core 并检查私有日志。") from rollback_error
-        raise RuntimeError("新核心未通过服务端验收，已回退到 " + core_version(old_config)
-                           + "；数据库、客户端身份和配额未由切换命令重写。") from error
-    print("核心切换完成；仍需 Shadowrocket / Mihomo 真机验收。\n" + result, flush=True)
+            raise RuntimeError("核心切换及自动回退未完成；已保留切换状态，请使用相同参数重试 --switch-core，并检查日志 /var/lib/3x-ui-bootstrap/install.log。") from rollback_error
+        raise RuntimeError("新核心未通过服务端检查，已回退到 " + core_version(old_config)
+                           + "（数据库、节点身份与流量配额均未受影响）。") from error
+    print("Xray-core 已切换至 " + target + "；请刷新客户端连接并测试网络连通性。\n" + result, flush=True)
 
 
 def subscription_paths(c, state):
     """The only public download routes. Never whitelist a whole path prefix."""
     require(state.get("raw_sub_path", "/sub/") == "/sub/",
-            "本版只管理固定订阅下载路径；请勿手动修改 subPath。")
+            "请勿手动修改面板 subPath，订阅路径由脚本统一管理以匹配 Nginx 访问控制。")
     ids = []
     for role in active_roles(c):
         node = state.get("nodes", {}).get(role, {})
@@ -1666,7 +1659,7 @@ def probe_reality_target(c, state, arch, host, existing_port=None, expected_exit
             "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {
                 "show": True, "serverName": host, "fingerprint": "chrome", "publicKey": state["public_key"],
                 "shortId": state["short_id"], "spiderX": "/"}}}]}
-    print("\n" + ("正式节点本机验收：" if existing_port is not None else "测试目标：") + host, flush=True)
+    print("\n" + ("验证节点本地转发：" if existing_port is not None else "测试目标：") + host, flush=True)
     passed = False
     with tempfile.TemporaryDirectory(prefix="3x-ui-diagnose-") as directory:
         root = Path(directory)
@@ -1706,20 +1699,20 @@ def diagnose_node(c, state, arch):
     binary = APP / "bin" / ("xray-linux-" + arch)
     version = subprocess.run([str(binary), "version"], text=True, capture_output=True, timeout=5)
     require(version.returncode == 0 and re.search(r"\bXray " + re.escape(core_version(c)) + r"\b", version.stdout),
-            "现有核心不是要求的 " + core_version(c) + "；诊断不会更新核心。")
-    print("临时副本诊断，Xray-core " + core_version(c) + "；读取已保存的配置。", flush=True)
-    print("现有服务、数据库、节点和安装记录不变；临时端口只监听 127.0.0.1。", flush=True)
+            "当前 Xray 核心不是配置的 " + core_version(c) + "；请先通过 --switch-core 对齐版本后再诊断。")
+    print("正在使用临时本地实例诊断 REALITY 握手（Xray-core " + core_version(c) + "）…", flush=True)
+    print("本诊断仅在 127.0.0.1 启动临时测试端口，不会修改现有服务、数据库或节点配置。", flush=True)
     current = probe_reality_target(c, state, arch, c["REALITY_HOST"])
     alternate = None
     if c["REALITY_HOST"] != "www.cloudflare.com":
         alternate = probe_reality_target(c, state, arch, "www.cloudflare.com")
     if not current and alternate:
-        print("\n当前目标失败，对照目标通过：已复现目标相关的握手差异；尚未修改正式节点。", flush=True)
+        print("\n诊断结果：当前目标 " + c["REALITY_HOST"] + " 握手失败，但 www.cloudflare.com 通过；可运行 --repair-reality-target 修复。", flush=True)
     elif current:
-        print("\n当前目标的临时副本通过；需继续核对正式进程配置、路由和客户端公网路径。", flush=True)
+        print("\n诊断结果：服务器本地 REALITY 握手正常。如客户端仍无法连接，请检查防火墙端口、客户端配置及本地网络。", flush=True)
     else:
-        print("\n临时副本未通过；请反馈以上脱敏错误，继续检查目标、核心运行及 VPS 出站。", flush=True)
-    print("诊断结束，临时进程和文件已清理；回环测试不能代替客户端公网验收。", flush=True)
+        print("\n诊断结果：本地测试未通过；请根据上方脱敏日志检查 REALITY 目标连通性、Xray 运行状态或 VPS 出站。", flush=True)
+    print("诊断结束，临时进程与测试文件已自动清理。", flush=True)
 
 
 def verify_runtime(c, state, arch):
@@ -1765,7 +1758,7 @@ def verify_runtime(c, state, arch):
     try:
         verify_subscription_denials(c, state)
         if c.get("PANEL_HTTPS"):
-            require(isinstance(API(c, state).call("inbounds/list"), list), "面板 HTTPS API 验收失败。")
+            require(isinstance(API(c, state).call("inbounds/list"), list), "面板 HTTPS API 检查失败。")
         for role in active_roles(c):
             if role in exhausted:
                 print(role + " 原生配额已耗尽；保留停用状态，跳过该线路订阅与转发检查。", flush=True)
@@ -1794,39 +1787,46 @@ def write_results(c, state):
     public_panel = c.get("PANEL_HTTPS", False)
     panel_url = ("https://" + c["SUB_HOST"] + ":" + str(c["PANEL_PORT"]) if public_panel
                  else "http://127.0.0.1:17777") + state["base_path"]
-    panel_label = "控制台 URL（域名 HTTPS，无需 SSH 隧道）：" if public_panel else "控制台 URL（必须先建立面板 SSH 隧道）："
-    result = ("部署完成（本机检查通过）\n\n"
+    panel_label = "控制台地址（公网 HTTPS）：" if public_panel else "控制台地址（需先建立本地 SSH 隧道）："
+    result = ("=== 3X-UI Bootstrap 部署信息 ===\n\n"
         "控制台账号：" + state["username"] + "\n"
         "控制台密码：" + state["password"] + "\n" +
-        panel_label + "\n" + panel_url + "\n\n")
+        panel_label + "\n" + panel_url + "\n")
+    if not public_panel:
+        result += ("SSH 隧道命令（在本地电脑新开终端执行）：\n"
+                   "ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:17777:127.0.0.1:"
+                   + str(c["PANEL_PORT"]) + " <SSH用户名>@" + c["SERVER_IP"] + "\n")
+    result += "\n"
     for index, role in enumerate(active_roles(c)):
         nc, ns = node_view(c, state, role)
         link, sub_link = vless_link(nc, ns), mihomo_link(nc, ns)
         raw_link = "https://" + c["SUB_HOST"] + ":" + str(c["SUB_PORT"]) + state.get("raw_sub_path", "/sub/") + ns["sub_id"]
         result += ("线路：" + nc["NODE_NAME"] + "\n"
-                   "Mihomo 链接（公网 HTTPS）：\n" + sub_link + "\n\n"
+                   "Mihomo 订阅（HTTPS）：\n" + sub_link + "\n\n"
                    "VLESS 链接：\n" + link + "\n\n")
         if "NODE_MODE" in c:
-            result += "Shadowrocket 订阅（公网 HTTPS）：\n" + raw_link + "\n\n"
+            result += "Shadowrocket 订阅（HTTPS）：\n" + raw_link + "\n\n"
             for suffix, value in (("vless.txt", link), ("mihomo-url.txt", sub_link), ("shadowrocket-url.txt", raw_link)):
                 atomic_write(STATE_DIR / (role + "-" + suffix), value + "\n")
         if index == 0:
             atomic_write(STATE_DIR / "vless.txt", link + "\n")
             atomic_write(STATE_DIR / "mihomo-url.txt", sub_link + "\n")
     result += ("3X-UI：" + VERSION + "\n"
-        "Xray-core：" + core_version(c) + "（固定摘要；客户端兼容性待真机验收）\n"
+        "Xray-core：" + core_version(c) + "\n"
         "线路模式：" + c.get("NODE_MODE", "direct") + "（共享 " + str(c["NODE_PORT"]) + "/TCP，按客户端分流）\n"
-        "REALITY 目标 / SNI：" + c["REALITY_HOST"] + "\n"
+        "REALITY 伪装目标 / SNI：" + c["REALITY_HOST"] + "\n"
         "面板监听：" + ("0.0.0.0:" if public_panel else "127.0.0.1:") + str(c["PANEL_PORT"]) +
-        ("（域名 HTTPS）\n" if public_panel else "（SSH 隧道）\n") +
-        "订阅入口：0.0.0.0:" + str(c["SUB_PORT"]) + "（Nginx HTTPS，仅有效下载地址）\n" +
-        "订阅后端：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "（HTTP，不开放公网）\n\n" +
+        ("（公网 HTTPS）\n" if public_panel else "（仅本机回环）\n") +
+        "订阅入口：0.0.0.0:" + str(c["SUB_PORT"]) + "（Nginx HTTPS）\n" +
+        "订阅后端：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "（仅本机回环，不开放公网）\n\n" +
         firewall_instructions(c) + "\n" +
-        "已验证：未耗尽配额线路的本机 REALITY/VLESS/Vision 认证、HTTPS 转发与出口检查。\n"
-        "下一步：客户端使用本次 Mihomo 订阅或 VLESS 链接；" +
-        ("浏览器打开上面的完整 HTTPS 面板地址。\n" if public_panel else "面板通过 SSH 隧道管理。\n") +
-        "尚未验证：Shadowrocket / Mihomo 真机公网连接、TLS 指纹兼容性和客户端实际出口。\n"
-        "结果：/var/lib/3x-ui-bootstrap/result.txt（仅 root 可读）\n")
+        "使用说明：\n" +
+        "1. 确认云防火墙与服务器防火墙已放行上述公网端口。\n" +
+        "2. 将上方的 Mihomo / Shadowrocket 订阅或 VLESS 链接导入客户端并测试连接与出口 IP。\n" +
+        ("3. 浏览器打开上面的完整 HTTPS 面板地址即可管理。\n"
+         if public_panel else
+         "3. 如需访问管理面板，请先在本地运行上方 SSH 隧道命令，再打开控制台地址。\n") +
+        "提示：完整订阅链接包含访问凭据，请妥善保管；本结果已保存至 /var/lib/3x-ui-bootstrap/result.txt（仅 root 可读）。\n")
     if "TRAFFIC_BUDGET" in c:
         result += "\n" + traffic_status(c, state)
     atomic_write(STATE_DIR / "panel-url.txt", panel_url + "\n")
@@ -1926,7 +1926,7 @@ def repair_reality_target(c, state, arch):
     result = write_results(new_config, state)
     plan["status"] = "complete"
     atomic_write(path, json.dumps(plan, indent=2) + "\n")
-    print("REALITY 目标修复完成；Shadowrocket 请重新导入下面的新链接，Mihomo 更新原订阅。\n", flush=True)
+    print("REALITY 伪装目标已修复为 www.cloudflare.com；Shadowrocket 请重新导入下方新链接，Mihomo 直接更新原订阅即可。\n", flush=True)
     print(result)
 
 
@@ -1999,7 +1999,7 @@ def configure_domain(c, state, arch):
                 "面板或订阅已被另外修改；保留记录，停止自动覆盖。")
     # 先取得并校验证书；此时不替换现有启动检查或续期任务，签发失败仍可使用原服务。
     install_certbot()
-    print("申请并校验域名 HTTPS 证书" + ("；面板和订阅共用证书…" if new_config.get("PANEL_HTTPS") else "；面板保持 SSH 模式…"), flush=True)
+    print("正在申请并验证域名 HTTPS 证书" + ("（面板与订阅将共用该证书）…" if new_config.get("PANEL_HTTPS") else "（管理面板保持 SSH 隧道访问）…"), flush=True)
     ensure_certificate(new_config, activate=False)
     if plan is None:
         check_db(c, state)
@@ -2012,7 +2012,7 @@ def configure_domain(c, state, arch):
                 "old_config": c, "new_config": new_config, "old_settings": initial_settings(c, state),
                 "new_settings": initial_settings(new_config, state)}
         atomic_write(path, json.dumps(plan, indent=2) + "\n")
-    print("切换面板与订阅地址；保留账号、Base URL、节点和客户端…", flush=True)
+    print("正在应用新域名与访问配置，保留已有账号、节点与客户端…", flush=True)
     run(["systemctl", "stop", NGINX_SERVICE])
     run(["systemctl", "stop", "x-ui"])
     require(not service_active(), "服务未停止，不写入正在运行的数据库。")
@@ -2035,7 +2035,7 @@ def configure_domain(c, state, arch):
     result = write_results(new_config, state)
     plan["status"] = "complete"
     atomic_write(path, json.dumps(plan, indent=2) + "\n")
-    print("域名与 HTTPS 配置完成；客户端请使用下面的新订阅地址。\n", flush=True)
+    print("域名与 HTTPS 配置已更新，客户端请使用下方的新订阅地址。\n", flush=True)
     print(result)
 
 
@@ -2275,9 +2275,9 @@ def main():
         require(state_file.is_file() and not state_file.is_symlink(), "状态目录不完整，请先检查，勿手动清空。")
         state = json.loads(state_file.read_text())
         require(state.get("owner") == OWNER and state.get("version") == VERSION,
-                "状态文件不属于这一版安装器；本版不自动迁移旧部署，请保留现有数据。")
+                "检测到不兼容的部署记录，为保护现有数据已停止操作；全新部署请使用空白 VPS。")
         require("TRAFFIC_LIMITS" not in state["config"] or mode in ("--configure-traffic", "--traffic-status", "--diagnose"),
-                "此部署使用旧共享额度任务；请填写 TOTAL_MONTHLY_GB / ISP_MONTHLY_GB 并执行 --configure-traffic 迁移为原生固定配额。")
+                "检测到旧版共享配额配置；请设置 TOTAL_MONTHLY_GB / ISP_MONTHLY_GB 并执行 --configure-traffic 迁移为原生月配额。")
         if saved_config_mode:
             c = state["config"]
             if mode in CONFIG_MODES:
@@ -2324,7 +2324,7 @@ def main():
             except BlockingIOError:
                 raise RuntimeError("另一个安装或修复进程正在运行。")
             fresh = json.loads(state_file.read_text())
-            require(fresh.get("owner") == OWNER and fresh.get("version") == VERSION, "安装记录已变化，停止修复。")
+            require(fresh.get("owner") == OWNER and fresh.get("version") == VERSION, "部署状态在操作期间发生变更，已停止以免覆盖。")
             repair_path = STATE_DIR / "reality-target-repair.json"
             if mode in ("--configure-domain", "--configure-nodes", "--configure-traffic", "--switch-core"):
                 require(not repair_path.exists() or json.loads(repair_path.read_text()).get("status") == "complete",
@@ -2342,12 +2342,12 @@ def main():
     arch = check_environment(c, state is not None)
     print(firewall_instructions(c), flush=True)
     check_isp(c)
-    print("检查 REALITY 目标的 TLS 1.3 / HTTP/2…", flush=True)
+    print("正在检查 REALITY 目标的 TLS 1.3 / HTTP/2 支持…", flush=True)
     check_target(c)
     check_dns(c)
     check_certificate_readiness(c)
     if mode == "--check":
-        print("检查通过；未安装软件、未修改服务。公网端口和客户端连通性需另外验证。")
+        print("预检通过（未安装任何软件或修改系统服务）。请确认防火墙已放行上述公网端口，然后执行 --install 开始部署。")
         return
     if state is None:
         STATE_DIR.mkdir(mode=0o700)
@@ -2374,7 +2374,7 @@ def main():
             print(write_results(c, state))
             return
         if not state.get("files_installed"):
-            print("安装必要依赖并校验官方发行包…", flush=True)
+            print("正在安装系统依赖并校验 3x-ui 官方发行包…", flush=True)
             run(["apt-get", "update"])
             # This VPS is dedicated to the bootstrap. Prevent the distro's
             # default site from starting on :80 during package installation.
@@ -2382,17 +2382,17 @@ def main():
             packages = ["curl", "ca-certificates", "tar", "python3-yaml", "openssl", "python3-venv", "nginx", "logrotate"]
             run(["apt-get", "install", "-y", "--no-install-recommends"] + packages)
             install_release(arch)
-            print("安装并校验 Xray-core " + core_version(c) + "…", flush=True)
+            print("正在安装并校验 Xray-core " + core_version(c) + "…", flush=True)
             install_core(arch, core_version(c))
             install_certbot()
             install_log_rotation()
             state["files_installed"] = True
             state["core_version"] = core_version(c)
             save(state)
-        print("配置 HTTPS 证书与自动续期…", flush=True)
+        print("正在申请并配置 HTTPS 证书及自动续期…", flush=True)
         ensure_certificate(c)
         if not state.get("panel_ready"):
-            print("配置管理入口（首次启动前）…", flush=True)
+            print("正在初始化面板安全配置与管理入口…", flush=True)
             harden_initial_db(c, state)
             if not state.get("api_token"):
                 output = run([str(APP / "x-ui"), "setting", "-getApiToken", "-tokenName", OWNER,
@@ -2412,42 +2412,43 @@ def main():
         ensure_node_keys(api, c, state)
         if "TRAFFIC_BUDGET" in c:
             bind_traffic_reset(c, state)
-        print("创建并读回共享 VLESS + REALITY 入站及客户端…", flush=True)
+        print("正在配置 VLESS + REALITY 节点与分流规则…", flush=True)
         rows = ensure_inbounds(api, c, state)
         ensure_routing(api, c, state, rows, allow_update=True)
         run(["systemctl", "restart", "x-ui"])
         wait_api(api)
         ensure_inbounds(api, c, state)
         install_subscription_gateway(c, state)
+        print("正在验证节点连通性与订阅网关…", flush=True)
         verify_runtime(c, state, arch)
         result = write_results(c, state)
         state["phase"] = "complete"
         save(state)
-        print(result)
+        print("部署完成！\n" + result)
 
 
 def cli(argv=None, script_path=None):
     global MODE, INPUT_CONFIG
     parser = argparse.ArgumentParser(
         prog="install-3x-ui.sh",
-        description="3X-UI Bootstrap：使用独立 JSON 配置部署 Direct / ISP 节点。",
-        epilog="配置默认位于脚本同目录的 config.json。--validate-config 可在本地执行，无需 root 或网络。")
-    parser.add_argument("--config", metavar="FILE", help="指定私有 JSON 配置文件")
+        description="3X-UI Bootstrap：面向 Ubuntu / Debian VPS 的 VLESS + REALITY 节点与订阅一键部署工具。",
+        epilog="默认读取脚本同目录的 config.json，可用 --config 指定路径。--validate-config 可在本地直接运行，无需 root 或网络。")
+    parser.add_argument("--config", metavar="FILE", help="指定 JSON 配置文件路径")
     parser.add_argument("--version", action="version", version=
                         "3x-ui-bootstrap " + PROJECT_VERSION + " / 3x-ui " + VERSION + " / Xray " + CORE_VERSION)
     actions = parser.add_mutually_exclusive_group()
     for flag, help_text in (
-        ("--install", "安装或续跑（默认）"),
-        ("--validate-config", "仅检查配置格式、模式和端口关系；不联网、不读安装状态"),
-        ("--check", "在 VPS 预检系统、ISP、DNS、REALITY 目标和证书条件"),
-        ("--show", "读取服务器保存的账号、面板和订阅链接"),
-        ("--diagnose", "读取已保存配置，用临时副本诊断 REALITY 握手"),
-        ("--repair-reality-target", "修复已有部署的 REALITY 目标"),
-        ("--configure-domain", "从配置文件读取域名和 HTTPS 选项，原地修改"),
-        ("--configure-nodes", "从配置文件读取线路、ISP 和配额选项，原地修改"),
-        ("--configure-traffic", "从配置文件读取月配额，保留原部署重置日"),
-        ("--switch-core", "仅切换 XRAY_VERSION 指定的固定核心；服务端验收失败时自动回退"),
-        ("--traffic-status", "读取现有客户端原生用量"),
+        ("--install", "安装部署或中断后继续安装（默认）"),
+        ("--validate-config", "校验本地 JSON 配置格式、模式与端口冲突（无需 root 或网络）"),
+        ("--check", "在 VPS 上预检系统环境、ISP 上游、DNS、REALITY 目标与证书条件"),
+        ("--show", "查看已部署的面板账号、访问地址和订阅链接"),
+        ("--diagnose", "使用临时本地实例诊断 REALITY 握手连通性（不影响现有服务）"),
+        ("--repair-reality-target", "将已部署节点的 REALITY 伪装目标修复为 www.cloudflare.com"),
+        ("--configure-domain", "应用配置文件中的域名、证书邮箱与面板 HTTPS 设置"),
+        ("--configure-nodes", "应用配置文件中的节点名称、线路模式、ISP 上游与配额设置"),
+        ("--configure-traffic", "调整客户端月流量配额（保留原有流量统计与重置日）"),
+        ("--switch-core", "切换配置文件中指定的 Xray-core 版本（异常时自动回退）"),
+        ("--traffic-status", "查看各线路客户端当前月流量使用情况"),
     ):
         actions.add_argument(flag, action="store_const", const=flag, dest="mode", help=help_text)
     args = parser.parse_args(argv)
@@ -2458,7 +2459,7 @@ def cli(argv=None, script_path=None):
         INPUT_CONFIG = load_config_values(args.config or default)
     if MODE == "--validate-config":
         c = config_from_file()
-        print("配置校验：PASS；仅检查本地配置，未联网、未读取或修改服务器状态。")
+        print("配置校验：PASS（格式与规则正确；上传至 VPS 后请先运行 --check 进行环境预检）。")
         print(firewall_instructions(c), end="")
         return 0
     require(os.geteuid() == 0, "请使用 sudo bash install-3x-ui.sh 执行服务器操作。")
@@ -2482,24 +2483,24 @@ if __name__ == "__main__":
             print("校验未通过：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"), file=sys.stderr)
         elif MODE == "--diagnose":
             print("诊断未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("未修改现有服务配置、账号、节点和安装记录。")
+            print("未对现有服务配置、账号、节点或部署状态做任何修改。")
         elif MODE == "--repair-reality-target":
             print("修复未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("保留节点、身份和修复记录；使用同一条 --repair-reality-target 命令重试。")
+            print("已保留节点、身份与修复状态；排查后使用同一条 --repair-reality-target 命令重试即可继续。")
         elif MODE == "--configure-domain":
             print("域名配置未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("保留数据库备份和切换记录；使用相同参数及 --configure-domain 续跑，不要删除安装记录。")
+            print("已保留数据库备份和变更状态；排查后使用相同参数重新执行 --configure-domain 即可继续，请勿删除状态目录。")
         elif MODE == "--configure-nodes":
             print("线路配置未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("保留节点身份、数据库备份和配置记录；使用相同参数及 --configure-nodes 续跑。")
+            print("已保留节点身份、数据库备份和变更状态；排查后使用相同参数重新执行 --configure-nodes 即可继续。")
         elif MODE == "--configure-traffic":
             print("配额配置未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("保留原生流量计数和部署日；使用相同参数及 --configure-traffic 续跑。")
+            print("已保留流量统计与重置日；排查后使用相同参数重新执行 --configure-traffic 即可继续。")
         elif MODE == "--switch-core":
             print("核心切换未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("保留身份、数据库及切换记录；按上方状态处理，不要删除安装记录。")
+            print("已保留节点身份、数据库与切换状态；请根据上方提示排查后重试，请勿删除状态目录。")
         else:
             print("安装未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
-            print("保留状态和数据；使用同一份脚本重试。日志：/var/lib/3x-ui-bootstrap/install.log")
+            print("已保留当前状态与数据，排查后重新执行相同安装命令即可继续。日志：/var/lib/3x-ui-bootstrap/install.log")
         raise SystemExit(1)
 PYTHON

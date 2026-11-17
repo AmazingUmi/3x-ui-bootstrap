@@ -1,114 +1,116 @@
-# Configuration reference
+# Configuration Reference
 
-[简体中文](configuration.zh-CN.md) | [Operations guide](operations.md) | [Security notes](security.md) | [Project home](../README.md)
+English | [简体中文](configuration.zh-CN.md) · [Project home](../README.md) · [Operations](operations.md) · [Security](security.md)
 
-Start with [config.example.json](../config.example.json). Use `--config FILE` to select a private configuration file; otherwise, the installer reads `config.json` beside the script. All 20 public fields are listed below. Omitted optional fields use their defaults.
+Start by copying [config.example.json](../config.example.json). Use `--config FILE` to specify a custom path; otherwise, the installer reads `config.json` in the same directory as `install-3x-ui.sh`. All 20 supported fields are documented below, and any omitted optional field uses its default value.
 
-## File format
+## File Format
 
-- Use a UTF-8 JSON object no larger than 64 KiB, with permissions of `600` or stricter.
-- Ports are integers, quotas are numbers, and `PANEL_HTTPS` is Boolean `true` / `false`; do not quote these values.
-- Comments, duplicate fields, unknown fields, `NaN`, and `Infinity` are rejected. Field names are case-sensitive.
-- Escape double quotes and backslashes according to JSON syntax. Single quotes, dollar signs, and backticks need no Shell escaping.
-- Configuration is read as data, never executed. `BOOTSTRAP_*` environment variables cannot override it. See [Security notes](security.md) for handling private files and links.
+- Must be a valid UTF-8 JSON object no larger than **64 KiB**, with file permissions set to `600` or stricter (`chmod 600 config.json`).
+- Ports are JSON integers, traffic quotas are JSON numbers, and `PANEL_HTTPS` is a JSON Boolean (`true` / `false`). Do not wrap these values in quotes.
+- Comments, duplicate keys, unknown keys, `NaN`, and `Infinity` are rejected. Key names are case-sensitive.
+- Escape double quotes and backslashes using standard JSON rules. Single quotes, `$`, and backticks do not require shell escaping.
+- The configuration file is parsed strictly as data and is never sourced or executed by a shell. `BOOTSTRAP_*` environment variables cannot override settings.
 
-## Required settings
+## Required Fields Quick Lookup
 
 | Scenario | Required fields |
 | --- | --- |
-| Every deployment | `SERVER_IP`: the new VPS static public IPv4 |
+| Every deployment | `SERVER_IP` (the VPS static public IPv4 address) |
 | `NODE_MODE="isp"` or `"direct+isp"` | `ISP_HOST`, `ISP_PORT`, `ISP_USERNAME`, `ISP_PASSWORD` |
 | `PANEL_HTTPS=true` | `SUB_DOMAIN` |
-| Dual routes with `TOTAL_MONTHLY_GB>0` | `ISP_MONTHLY_GB`, satisfying `0 < ISP_MONTHLY_GB < TOTAL_MONTHLY_GB` |
+| Dual routes with `TOTAL_MONTHLY_GB > 0` | `ISP_MONTHLY_GB`, satisfying `0 < ISP_MONTHLY_GB < TOTAL_MONTHLY_GB` |
 
-The defaults provide Direct, an SSH-only panel, and unlimited traffic. Only `SERVER_IP` is required for that setup.
+With the defaults (`direct` mode, SSH-tunneled panel, unlimited traffic), only `SERVER_IP` is required.
 
-## VPS and routes
+## Server and Routing
 
-| Field | Type | Default | Meaning and constraints |
+| Field | Type | Default | Description and constraints |
 | --- | --- | --- | --- |
-| `SERVER_IP` | String | None; required | VPS static public IPv4; private addresses, reserved addresses, and placeholders are rejected |
-| `NODE_NAME` | String | `"MyNode"` | Nickname, 1–64 characters; no whitespace, `/`, `\`, or control characters |
-| `NODE_MODE` | String | `"direct"` | One of `direct`, `isp`, or `direct+isp` |
-| `REALITY_HOST` | String | `"www.cloudflare.com"` | REALITY target and SNI; domain only, without a scheme, port, or path; ownership of the domain is not required |
+| `SERVER_IP` | String | Required | Static public IPv4 address of the VPS; private, reserved, and placeholder values are rejected |
+| `NODE_NAME` | String | `"MyNode"` | Node display nickname, 1–64 characters; no whitespace, `/`, `\`, or control characters |
+| `NODE_MODE` | String | `"direct"` | Routing mode: `"direct"`, `"isp"`, or `"direct+isp"` |
+| `REALITY_HOST` | String | `"www.cloudflare.com"` | REALITY target and SNI hostname (domain only, without scheme, port, or path; ownership not required) |
 
-`direct` uses the VPS exit, `isp` uses the upstream proxy exit, and `direct+isp` provides both routes. Every mode uses one inbound on `NODE_PORT`. Dual routes authenticate with independent UUIDs and use different exits; their client names are `<nickname>-Direct` and `<nickname>-ISP`. Renaming a node in a client app does not change its exit.
+- `direct` routes traffic directly from the VPS. `isp` routes traffic through your upstream proxy. `direct+isp` enables both routes on the same `NODE_PORT` with separate UUIDs and subscription URLs (`<NODE_NAME>-Direct` and `<NODE_NAME>-ISP`).
+- Renaming a node locally in a client app does not change its server-side exit route.
+- During `--check` / `--install`, the installer verifies that `REALITY_HOST` supports TLS 1.3 and HTTP/2.
 
-Installation preflight checks the REALITY target for TLS 1.3 and HTTP/2 support.
+## Xray Core Version
 
-## Xray test version
-
-| Field | Type | Default | Meaning and constraints |
+| Field | Type | Default | Description and constraints |
 | --- | --- | --- | --- |
-| `XRAY_VERSION` | String | `"26.10.31"` | Only `26.10.31` and the historical comparison build `26.6.27`; both architectures have pinned official digests. No `latest` or custom URL |
+| `XRAY_VERSION` | String | `"26.10.31"` | Allowed values: `"26.10.31"` (default) or `"26.6.27"` (legacy client compatibility). Both use pinned official SHA-256 checksums; custom URLs and `latest` are not accepted |
 
-Fresh installation uses this field. Use `--switch-core` to apply it to an existing deployment of this candidate; other maintenance commands retain the deployed core. The old build is for compatibility comparison, not a claim of current security fixes.
+Used on fresh installations and by `--switch-core` to change the Xray binary safely. Other maintenance commands preserve the currently deployed core version. Keep `26.10.31` unless an older client requires `26.6.27`.
 
-## ISP upstream
+## ISP Upstream Proxy
 
-These settings apply only to modes that include ISP. Keep the default empty values for Direct-only mode.
+These fields are used only when `NODE_MODE` includes `isp`. Keep the default empty values for `direct`-only deployments.
 
-| Field | Type | Default | Meaning and constraints |
+| Field | Type | Default | Description and constraints |
 | --- | --- | --- | --- |
-| `ISP_HOST` | String | `""` | Required for ISP; upstream IP or domain without a scheme, port, or path |
-| `ISP_PORT` | Integer or `null` | `null` | Required for ISP; 1–65535; the upstream destination port, not a local inbound port |
-| `ISP_USERNAME` | String | `""` | Required for ISP; no control characters; HTTP proxy usernames cannot contain `:` |
-| `ISP_PASSWORD` | String | `""` | Required for ISP; no control characters |
-| `ISP_PROTOCOL` | String | `"socks5"` | `socks5` or `http`, matching the provider's protocol |
-| `ISP_EXPECTED_IP` | String | `""` | Optional expected exit public IPv4; when set, the actual exit must match. Leave empty for a dynamic exit |
+| `ISP_HOST` | String | `""` | Required for ISP modes; upstream IP or domain without scheme, port, or path |
+| `ISP_PORT` | Integer or `null` | `null` | Required for ISP modes; `1–65535` (upstream proxy port) |
+| `ISP_USERNAME` | String | `""` | Required for ISP modes; no control characters (HTTP usernames cannot contain `:`) |
+| `ISP_PASSWORD` | String | `""` | Required for ISP modes; no control characters |
+| `ISP_PROTOCOL` | String | `"socks5"` | `"socks5"` or `"http"`, matching your proxy provider |
+| `ISP_EXPECTED_IP` | String | `""` | Optional expected public IPv4 exit; when set, preflight and runtime checks verify the actual exit matches. Leave empty for dynamic exits |
 
-For SOCKS5, the username and password must each be no longer than 255 UTF-8 bytes. `ISP_HOST` is the connection endpoint; `ISP_EXPECTED_IP` is the actual exit, which may differ. The ISP exit must always differ from `SERVER_IP`.
+- For SOCKS5, username and password must each be at most 255 bytes when UTF-8 encoded.
+- `ISP_HOST` is the proxy connection endpoint, whereas `ISP_EXPECTED_IP` is the resulting public exit IP (they may differ). The ISP exit IP must always differ from `SERVER_IP`.
+- ISP routing carries TCP traffic and explicitly blocks UDP. Upstream failures never fall back to Direct. Upstream credentials are never included in client subscription exports.
 
-The ISP route supports TCP and explicitly blocks UDP. Upstream failure does not fall back to Direct. Upstream credentials are not included in client subscriptions.
+## Domain and Management Panel
 
-## Domain and panel
-
-| Field | Type | Default | Meaning and constraints |
+| Field | Type | Default | Description and constraints |
 | --- | --- | --- | --- |
-| `SUB_DOMAIN` | String | `""` | Your domain without a scheme, port, or path; when empty, subscriptions use the VPS public IP with an HTTPS certificate |
-| `PANEL_HTTPS` | Boolean | `false` | **Recommended** `false`: loopback-only panel accessed through SSH; `true`: public domain-based HTTPS panel, requiring `SUB_DOMAIN` |
-| `ACME_EMAIL` | String | `""` | Optional certificate contact email; must have a valid email format when provided |
+| `SUB_DOMAIN` | String | `""` | Custom domain without scheme, port, or path. When empty, subscriptions use an IP-based HTTPS certificate |
+| `PANEL_HTTPS` | Boolean | `false` | **Recommended** `false`: panel binds only to `127.0.0.1` and is accessed via SSH tunnel. `true`: exposes HTTPS panel publicly (requires `SUB_DOMAIN`) |
+| `ACME_EMAIL` | String | `""` | Optional email address for Let's Encrypt certificate notifications; must be a valid email format if provided |
 
-When `SUB_DOMAIN` is set, its A record must point directly to `SERVER_IP`. Setting a domain while keeping `PANEL_HTTPS=false` uses the domain only for subscriptions; panel access stays behind the SSH tunnel. The public panel and Nginx subscriptions share a domain and certificate, with separate ports.
+- When `SUB_DOMAIN` is set, its `A` record must point directly to `SERVER_IP` without CDN proxying.
+- You can set `SUB_DOMAIN` while keeping `PANEL_HTTPS=false`: your domain will be used for HTTPS subscriptions while the management panel stays private behind SSH.
+- `SUB_DOMAIN` and `REALITY_HOST` are normalized to lowercase (max 253 chars, valid domain labels).
 
-`SUB_DOMAIN` and `REALITY_HOST` are normalized to lowercase. Domains must contain a dot and be at most 253 characters long. Each label must be 1–63 characters, using letters, digits, and internal hyphens only.
-
-## Listening ports
+## Listening Ports
 
 | Field | Type | Default | Listener and purpose |
 | --- | --- | --- | --- |
-| `NODE_PORT` | Integer | `443` | Public VLESS + REALITY inbound shared by all active routes |
-| `PANEL_PORT` | Integer | `7777` | Panel port; loopback-only by default, public when `PANEL_HTTPS=true` |
-| `SUB_PORT` | Integer | `38443` | Public HTTPS subscription entry served by Nginx; allow it through the firewalls |
-| `SUB_BACKEND_PORT` | Integer | `12096` | 3x-ui HTTP subscription backend bound only to `127.0.0.1`; **do not expose publicly** |
+| `NODE_PORT` | Integer | `443` | Public VLESS + REALITY inbound port shared by active routes |
+| `PANEL_PORT` | Integer | `7777` | Management panel port (`127.0.0.1` by default; `0.0.0.0` if `PANEL_HTTPS=true`) |
+| `SUB_PORT` | Integer | `38443` | Public Nginx HTTPS subscription gateway port |
+| `SUB_BACKEND_PORT` | Integer | `12096` | Internal 3x-ui HTTP subscription backend (`127.0.0.1` only; **never expose publicly**) |
 
-All four listening ports must be integers from 1–65535 and distinct. None may use `80/TCP`, which is reserved for certificate issuance and renewal. VPS preflight also checks for conflicts with the actual SSH port and other processes. `ISP_PORT` is an outbound destination and does not need to differ from these four local listening ports.
+- All four listening ports must be distinct integers between `1` and `65535`.
+- None may use `80`, which is reserved for Certbot HTTP-01 validation and renewal, and none may conflict with your SSH port. (`ISP_PORT` is an outbound destination port and does not conflict with these.)
+- Client subscription URLs always point to `SUB_PORT` (`https://<SUB_HOST>:<SUB_PORT>/...`), never `SUB_BACKEND_PORT`.
 
-The default subscription path is `public 38443 HTTPS → Nginx → 127.0.0.1:12096 HTTP`. Client downloads and quota refreshes use the public `SUB_PORT`; do not put the backend port into client URLs. See [Security notes](security.md) for access-control rules and the [Operations guide](operations.md) for firewall and inspection commands.
+## Monthly Traffic Quotas
 
-## Monthly traffic quotas
-
-| Field | Type | Default | Meaning and constraints |
+| Field | Type | Default | Description and constraints |
 | --- | --- | --- | --- |
-| `TOTAL_MONTHLY_GB` | Number | `0` | Total monthly budget in GiB; `0` means no total limit |
-| `ISP_MONTHLY_GB` | Number | `0` | ISP monthly quota in GiB; its interpretation depends on the route mode below |
+| `TOTAL_MONTHLY_GB` | Number | `0` | Total monthly traffic budget in GiB (`0` = unlimited) |
+| `ISP_MONTHLY_GB` | Number | `0` | ISP monthly traffic quota in GiB (behavior depends on `NODE_MODE`) |
 
-Both accept `0–9999999.999`, with up to three decimal places. One GiB is 1024³ bytes. Let `T` be the total budget and `I` the ISP quota:
+Both accept `0` to `9999999.999` with up to 3 decimal places (`1 GiB = 1024³ bytes`). Let `T` = `TOTAL_MONTHLY_GB` and `I` = `ISP_MONTHLY_GB`:
 
 | Mode and settings | Direct quota | ISP quota | Constraint |
 | --- | --- | --- | --- |
-| `direct` | `T`; unlimited when `T=0` | No ISP route | `I` must be `0` |
-| `isp` | No Direct route | The smaller nonzero value of `T` and `I`; unlimited if both are zero | Either value can be set alone |
-| `direct+isp`, `T>0` | `T−I` | `I` | Requires `0<I<T` |
-| `direct+isp`, `T=0` | Unlimited | `I`; unlimited when `I=0` | ISP can be limited independently |
+| `direct` | `T` (unlimited if `T = 0`) | — | `I` must be `0` |
+| `isp` | — | Smaller nonzero value of `T` and `I` (unlimited if both `0`) | Either can be set |
+| `direct+isp`, `T > 0` | `T - I` | `I` | Must satisfy `0 < I < T` |
+| `direct+isp`, `T = 0` | Unlimited | `I` (unlimited if `I = 0`) | Limits ISP independently |
 
-Native panel client quotas disable only the exhausted client. Resets retain the original deployment day at midnight in the panel's time zone; shorter months use their last day. Routes do not borrow unused quota from each other. Changing a limit does not move the reset day to today. Client traffic accounting has a different scope from the provider's whole-server billing.
+- Quotas use 3x-ui's native client metering. Exhausting one route disables only that client; routes do not borrow unused quota from each other.
+- Monthly resets occur at midnight (in the panel's configured time zone) on the original deployment day of the month (or the last day of shorter months). Updating quotas later preserves the original reset day.
+- Note that proxy client traffic accounting may differ from your VPS provider's total NIC-level bandwidth billing.
 
-## Examples
+## Configuration Examples
 
-Each example is a complete JSON object; omitted fields use defaults. Replace `YOUR_VPS_IP`, example domains, and upstream credentials with actual values before installation.
+Omitted fields automatically use their defaults. Replace placeholders like `YOUR_VPS_IP`, example domains, and credentials with real values before deploying.
 
-### Minimal Direct setup
+### Minimal Direct Setup
 
 ```json
 {
@@ -116,9 +118,9 @@ Each example is a complete JSON object; omitted fields use defaults. Replace `YO
 }
 ```
 
-This uses the default ports, IP-based HTTPS subscriptions, an SSH-only panel, and unlimited traffic.
+Uses default ports (`443` / `38443` / `7777` / `12096`), IP-based HTTPS subscriptions, SSH-tunneled panel access, and unlimited traffic.
 
-### Direct + ISP with domain subscriptions and the recommended SSH panel
+### Direct + ISP with Custom Domain and SSH Panel
 
 ```json
 {
@@ -138,23 +140,21 @@ This uses the default ports, IP-based HTTPS subscriptions, an SSH-only panel, an
 }
 ```
 
-This allocates 900 GiB to Direct and 100 GiB to ISP. The panel stays private. A changing management-device IP does not require a source-IP allowlist for SSH key authentication. Only explicitly set `PANEL_HTTPS=true` if a public HTTPS panel is required.
+Allocates `900 GiB` to Direct and `100 GiB` to ISP, serves subscriptions over HTTPS at `node.example.com:38443`, and keeps the management panel private behind your SSH tunnel.
 
-## Applying changes after installation
+## Updating Settings After Installation
 
-Editing JSON does not immediately change a running deployment. Each configuration operation reads only its own fields; see the [Operations guide](operations.md) for full commands.
+Editing `config.json` alone does not modify a running deployment. Use the maintenance commands below to apply specific groups of settings.
 
-Omitting a field read by an operation usually selects its default rather than retaining the server's previous value; the email exception is noted below. Maintain a complete candidate configuration aligned with the deployment instead of using the minimal installation example to change existing routes.
+Keep a complete `config.json` that reflects your active deployment—for fields read by a given command, omitting an optional field resets it to its default (except `ACME_EMAIL`, where empty preserves the previous email).
 
-| Operation | Fields applied from JSON | Notes |
+| Command | Fields applied from `config.json` | Notes |
 | --- | --- | --- |
-| `--switch-core` | `XRAY_VERSION` | Replaces only the checksum-pinned Xray; rolls back on server-check failure and retains identity, database and quotas |
-| `--configure-domain` | `SUB_DOMAIN`, `PANEL_HTTPS`, `ACME_EMAIL` | Requires a nonempty domain; cannot clear the domain to return to IP-based subscriptions. An empty email preserves the previous email |
-| `--configure-nodes` | `NODE_NAME`, `NODE_MODE`, every `ISP_*` field, `TOTAL_MONTHLY_GB` | Includes upstream credentials and quotas; synchronize JSON first to avoid overwriting panel changes with stale values |
-| `--configure-traffic` | `TOTAL_MONTHLY_GB`, `ISP_MONTHLY_GB` | Uses the deployed route mode, preserving counters and the original reset day |
+| `--switch-core` | `XRAY_VERSION` | Replaces the Xray binary with automatic verification and rollback; preserves database, identities, and quotas |
+| `--configure-domain` | `SUB_DOMAIN`, `PANEL_HTTPS`, `ACME_EMAIL` | Requires a non-empty `SUB_DOMAIN`; empty `ACME_EMAIL` keeps existing email |
+| `--configure-nodes` | `NODE_NAME`, `NODE_MODE`, all `ISP_*` fields, `TOTAL_MONTHLY_GB`, `ISP_MONTHLY_GB` | Synchronize `config.json` first if you edited ISP credentials in the web panel |
+| `--configure-traffic` | `TOTAL_MONTHLY_GB`, `ISP_MONTHLY_GB` | Applies to the active mode while preserving traffic counters and the original reset day |
 
-All four operations require the JSON `SERVER_IP` to match the saved deployment. `NODE_PORT`, `PANEL_PORT`, `SUB_PORT`, `SUB_BACKEND_PORT`, and `REALITY_HOST` are taken from saved state and are not changed by these operations. Editing those values in JSON alone has no effect.
-
-`--repair-reality-target` is a separate repair operation. It reads saved deployment data and repairs the target to `www.cloudflare.com`, rather than applying a new target from JSON. `--show`, `--traffic-status`, and `--diagnose` also read saved server data and do not need a configuration file.
-
-Initial installation requires a fresh VPS. An interrupted installation of the current version can resume with its saved state; older deployments are not migrated in place. Follow the [Operations guide](operations.md) for deployment, client acceptance, and troubleshooting.
+- All four commands verify that `SERVER_IP` in `config.json` matches the existing deployment.
+- Listening ports (`NODE_PORT`, `PANEL_PORT`, `SUB_PORT`, `SUB_BACKEND_PORT`) and `REALITY_HOST` are fixed at initial installation and are not changed by these commands.
+- `--repair-reality-target`, `--show`, `--traffic-status`, and `--diagnose` read saved server state and do not require `--config`. See the [Operations Guide](operations.md) for usage details.

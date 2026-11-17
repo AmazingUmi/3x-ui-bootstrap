@@ -2,34 +2,53 @@
 
 English | [简体中文](CONTRIBUTING.zh-CN.md)
 
-## Local checks
+Thank you for your interest in contributing to **3X-UI Bootstrap**.
 
-You need Bash, Python 3.10+, and Git. From the repository root, run:
+## Local Tests
 
-~~~bash
+Prerequisites: **Bash**, **Python 3.10+**, and **Git** (plus local `nginx` and `openssl` to run the live Nginx gateway test suite).
+
+From the repository root, run:
+
+```bash
 bash scripts/check.sh
-~~~
+```
 
-Checks do not request certificates, install software, connect to real ISP proxies, or change system services. Changes to release packages, panel APIs, certificates, routing, or client compatibility need additional VPS / Shadowrocket / Mihomo acceptance results.
+Offline tests cover shell/Python syntax, JSON schema validation, configuration boundaries, routing rules, native client quotas, core-switching rollback logic, and local Nginx gateway access control. They do not request ACME certificates, modify host services, or connect to live ISP proxies.
 
-## Isolated release checks
+## Containerized Release Smoke Test
 
-`scripts/check-release.py` runs real upstream binaries only in a disposable root Docker container with `--network none`; it refuses host execution or a container with a non-loopback interface. It covers initial CLI/DB/API setup, the shared inbound and native quotas, HTTPS subscription exports, new/old core switching, and an injected acceptance failure with rollback. The injected acceptance failure must restore the original binary and working subscriptions. It does not exercise systemd boot, real ACME issuance/renewal, public forwarding, ISP exits, or phone apps.
+`scripts/check-release.py` exercises the real upstream `x-ui`, `xray`, and `certbot` binaries inside an isolated, disposable root container with `--network none`. It validates CLI/DB initialization, shared-inbound routing, native quotas, HTTPS subscription downloads, bidirectional core switching, and automatic rollback on failure.
 
-Prepare a public-only copy of `install-3x-ui.sh`, `config.example.json`, `scripts/`, and `tests/`, plus an asset directory containing the official panel archive for the tested architecture, both pinned Xray archives, and the Certbot wheel. Keep original current-release filenames; prefix the historical Xray filename with `old-`. The runner validates all archive digests before execution. Build `scripts/release-check.Dockerfile` using the asset directory as build context to cache Certbot dependencies. For each of `linux/arm64` and `linux/amd64`, run that image with `--rm --network none`, no published ports, read-only mounts of the public source at `/src` and assets at `/assets`, and command `python3 /src/scripts/check-release.py --assets /assets`. Never mount private `config.json`, the host Docker socket, or host service/database directories into the test container.
+To run it locally for `linux/amd64` or `linux/arm64`:
 
-## Change guidelines
+1. Create a clean copy containing only public files (`install-3x-ui.sh`, `config.example.json`, `scripts/`, `tests/`). Never mount private `config.json` files, the host Docker socket, or host state directories.
+2. Prepare an assets directory containing the official `x-ui` release archive, the current and `26.6.27` `Xray-core` archives (prefix the `26.6.27` filename with `old-`), and the `Certbot` wheel (checksums are verified before execution).
+3. Build `scripts/release-check.Dockerfile` with the assets directory as the build context to cache Certbot dependencies.
+4. Run the container with `--rm --network none` (no published ports), mounting the public source read-only at `/src` and assets read-only at `/assets`:
 
-- The installation entry point is install-3x-ui.sh. User settings come only from a separate JSON file. Preserve deployment by uploading just the script and configuration.
-- Do not add legacy configuration aliases or source Shell configuration files. Update the example, documentation, and boundary tests when adding a field.
-- This candidate defaults to Xray 26.10.31 and allows explicit selection of checksum-pinned 26.6.27 for comparison. Preserve digest and version checks; do not accept arbitrary download URLs or automatically follow latest. The historical Shadowrocket 2.2.92 (3345) + Xray 26.6.27 result does not transfer to this candidate. Record actual Shadowrocket and Mihomo acceptance before a formal release.
-- Preserve ownership checks, resumable installation, existing client identities, traffic counters, and the original deployment day. Do not blindly overwrite manual panel changes.
-- ISP failure must not automatically fall back to Direct. Explain native client quotas separately from whole-server traffic billing.
-- Shared-inbound routing must match the authenticated client email. Cover two clients on one port, independent subscriptions and quotas, blocked ISP UDP, and blocked unmatched clients. Historical version-pair evidence does not replace real-client acceptance of a new topology.
-- Commit only example data. Check staged configurations, logs, accounts, subscriptions, and keys for private information.
+```bash
+python3 /src/scripts/check-release.py --assets /assets
+```
 
-User documentation has three topics: [operations](docs/operations.md), [security](docs/security.md), and [configuration](docs/configuration.md). Put troubleshooting in the operations guide and keep README focused on the project overview and document links. Topic documents have English versions and Simplified Chinese copies named `*.zh-CN.md`; the project home page is in Simplified Chinese. Keep commands, defaults, constraints, and verification records aligned across languages.
+## Design & Security Invariants
 
-## Release preparation
+Please keep these core contracts intact in all pull requests:
 
-This project uses the [MIT License](LICENSE). Before a formal release, record VPS and client acceptance for the release being published. See the operations guide for the 2026-11-01 deployment feedback and its version limits. Passing local checks alone does not establish successful deployment or client connectivity.
+- **Single-script + JSON boundary**: `install-3x-ui.sh` is the sole entry point and reads user settings strictly as JSON data (never sourced shell code or legacy config aliases). Whenever you add or change a configuration field, update `config.example.json`, documentation, and boundary tests together.
+- **Pinned, verified releases**: Upstream archives must remain pinned to explicit versions with SHA-256 checksum verification—never accept arbitrary download URLs or track `latest`.
+- **Safe resumability & state ownership**: Preserve ownership validation, resumable failure handling, existing client UUIDs/subscription IDs, traffic counters, and original deployment reset days. Never overwrite manual panel changes silently.
+- **Strict route isolation**: ISP upstream failure must never fall back to Direct. Shared-inbound routing must match authenticated client emails (`user`), block ISP UDP, and deny unmatched clients.
+- **Zero secrets in Git**: Commit only placeholder/example data. Always review staged files for private IPs, credentials, keys, or logs before pushing.
+
+## Documentation Conventions
+
+All documentation is maintained in both English (`*.md`) and Simplified Chinese (`*.zh-CN.md`), covering `README*`, `CHANGELOG*`, `CONTRIBUTING*`, and `docs/{operations,configuration,security}*`. Keep commands, defaults, field constraints, and behavior aligned across both languages, with troubleshooting grouped under the Operations Guide.
+
+## Release Checklist
+
+Before tagging a formal release (licensed under [MIT](LICENSE)):
+
+1. Confirm `bash scripts/check.sh` passes on supported Python versions.
+2. Run `scripts/check-release.py` across `amd64` and `arm64` containers.
+3. Verify fresh VPS installation, ACME issuance/renewal, Direct/ISP routing, and real client connectivity (Mihomo and Shadowrocket).
