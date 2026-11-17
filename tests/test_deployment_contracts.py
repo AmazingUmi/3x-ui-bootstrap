@@ -31,10 +31,10 @@ class DeploymentContracts(unittest.TestCase):
         return self.config(**values)
 
     def test_versions_are_pinned(self):
-        self.assertEqual(self.app.VERSION, "v3.10.2")
-        self.assertEqual(self.app.CORE_VERSION, "26.6.27")
-        self.assertEqual(self.app.OWNER, "3x-ui-bootstrap-v6")
-        self.assertEqual(self.app.PROJECT_VERSION, "0.3.0")
+        self.assertEqual(self.app.VERSION, "v3.11.0")
+        self.assertEqual(self.app.CORE_VERSION, "26.10.31")
+        self.assertEqual(self.app.OWNER, "3x-ui-bootstrap-v7")
+        self.assertEqual(self.app.PROJECT_VERSION, "0.4.0-rc.1")
 
     def test_subscription_backend_is_loopback_http_in_both_panel_modes(self):
         for public_panel in (False, True):

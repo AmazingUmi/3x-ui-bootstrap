@@ -34,8 +34,8 @@ bash ./install-3x-ui.sh --config ./config.json --validate-config
 | 实际 SSH 端口，常见为 22 | 登录、上传、SSH 隧道 | 保留管理连接 |
 | 80 | 证书申请和自动续期 | 保持可达 |
 | 443 | Direct / ISP 共享节点入站 | 放行 |
-| 2096 | Nginx HTTPS 订阅入口 | 放行 |
-| 7777 | 公网 HTTPS 面板 | 仅 `PANEL_HTTPS=true` 时放行，建议限制管理来源 IP |
+| 38443 | Nginx HTTPS 订阅入口 | 放行 |
+| 7777 | 公网 HTTPS 面板 | 默认不放行；仅显式选择 `PANEL_HTTPS=true` 时公开 |
 | 12096 | 本机订阅后端 | 不开放公网，仅监听 `127.0.0.1` |
 
 修改端口后，以配置校验输出为准。默认 SSH 面板无需开放 7777；Direct 和 ISP 共用 `NODE_PORT`，不需要另开 ISP 入站端口。
@@ -48,6 +48,8 @@ bash ./install-3x-ui.sh --config ./config.json --validate-config
 scp ./install-3x-ui.sh ./config.json ubuntu@YOUR_VPS_IP:~/
 ssh ubuntu@YOUR_VPS_IP
 ~~~
+
+先安装发行版的系统安全更新，按需重启并核对运行内核。`--check` 会报告系统、内核、待重启标记和 SSH 基础认证配置；它不会自动更新系统或认证 CVE 已修复。确认 SSH 密钥登录可用后再关闭密码认证，不要依赖动态来源 IP 白名单。
 
 在 VPS 上先执行预检：
 
@@ -93,10 +95,10 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 ~~~bash
 sudo systemctl status x-ui 3x-ui-subscription --no-pager
-sudo ss -lntp | grep -E ':(2096|12096)\b'
+sudo ss -lntp | grep -E ':(38443|12096)\b'
 ~~~
 
-使用默认端口时，应看到 Nginx 监听 `0.0.0.0:2096`，x-ui 仅监听 `127.0.0.1:12096`。采用自定义端口时，相应替换命令中的数字。
+使用默认端口时，应看到 Nginx 监听 `0.0.0.0:38443`，x-ui 仅监听 `127.0.0.1:12096`。采用自定义端口时，相应替换命令中的数字。
 
 再从真实客户端完成以下检查：
 
@@ -104,9 +106,11 @@ sudo ss -lntp | grep -E ':(2096|12096)\b'
 2. 分别使用 Direct / ISP 浏览网页；Direct 出口为 VPS IP，ISP 出口为供应商出口。
 3. 从本机访问订阅入口的 `/`、`/assets/`、`/sub/assets/`，应返回 404；完整有效订阅链接应正常下载。
 
-节点连接默认走 443，订阅刷新默认走 2096，需要分别验证。服务端检查和 TCP 端口连通不能代替真实 VLESS 认证及客户端公网验收。桌面 TUN 可能接管探测连接，测试前核对实际网络路径。
+节点连接默认走 443，订阅刷新默认走 38443，需要分别验证。服务端检查和 TCP 端口连通不能代替真实 VLESS 认证及客户端公网验收。桌面 TUN 可能接管探测连接，测试前核对实际网络路径。
 
-2026-11-01 已收到本版新机部署“正常使用”的用户反馈，并完成外部 IPv4 暴露复测，范围见[安全说明](security.zh-CN.md)。本次未记录客户端版本，不能扩展为所有版本的兼容性保证。
+2026-11-17 用户确认 **0.4.0-rc.1** 部署可用；所选核心、客户端版本和分项验收结果未记录。
+
+2026-11-01 已收到 **0.3.0** 新机部署“正常使用”的用户反馈，并完成外部 IPv4 暴露复测，范围见[安全说明](security.zh-CN.md)。本次未记录客户端版本，不能扩展为所有版本的兼容性保证。
 
 ## 日常维护
 
@@ -120,13 +124,28 @@ sudo ss -lntp | grep -E ':(2096|12096)\b'
 | 应用域名、HTTPS 面板和邮箱设置 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain` |
 | 应用昵称、模式、ISP 和配额设置 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes` |
 | 只调整月配额，保留原部署重置日 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic` |
+| 切换固定 Xray 核心 | `sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core` |
 | 修复已部署节点的 REALITY 目标 | `sudo bash ~/install-3x-ui.sh --repair-reality-target` |
 
 `--show`、`--traffic-status`、`--diagnose` 和 `--repair-reality-target` 使用服务器保存的部署，不需要配置文件。三个 `--configure-*` 命令各有更新范围，详见[参数配置](configuration.zh-CN.md)；服务配置变更可能短暂中断连接，完成后按输出更新客户端。
 
+`--configure-traffic` 后不接数字。先在原完整 JSON 配置中修改 `TOTAL_MONTHLY_GB` 和 `ISP_MONTHLY_GB`，再执行上表命令。单位为 GiB；双线路有限总预算时，须满足 `0 < ISP_MONTHLY_GB < TOTAL_MONTHLY_GB`，Direct 分配剩余额度。已有用量和原重置日保持不变。
+
 `--diagnose` 使用临时回环副本，不更改现有节点或服务，也不复现正式 ISP 出站。`--repair-reality-target` 会修改正式部署，适合诊断已确认目标异常后使用。
 
 通过面板手动修改 ISP 账号后，先同步私有配置；不要用旧参数运行 `--configure-nodes`。受管订阅 ID、路径、监听地址应由脚本维护，以免与 Nginx 白名单不一致。
+
+## 新旧 Xray 对照测试
+
+默认 `XRAY_VERSION` 为 `26.10.31`。在本候选版的新部署上，把完整配置中的此字段改为 `26.6.27` 后执行：
+
+~~~bash
+sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core
+~~~
+
+恢复新版时改回 `26.10.31` 并运行同一命令。命令会先校验新旧发行包，再短暂停止服务、替换核心并进行服务端验收；失败时尝试恢复旧核心并重新验收。自动回退成功和回退未完成会分别报告。中断后用相同目标版本续跑，不删除 `core-change.json`。此命令不升级面板、不还原数据库，也不重置客户端身份、配额或部署日。
+
+服务端通过不代表 iPhone 已通过；仍需分别测试 Shadowrocket 和 Mihomo，记录应用版本、TLS 指纹、Wi-Fi／蜂窝网络、Direct／ISP 出口、重连和订阅额度刷新。若只是手机不能连，自动检查无法感知，需手动选择对照版本。旧核心不作为长期安全推荐。不要在面板内自动更新核心，不支持任意版本或旧部署迁移。
 
 ## 证书和服务排查
 
@@ -166,7 +185,7 @@ sudo journalctl -u 3x-ui-cert-renew.service -n 80 --no-pager
 
 ### 面板或订阅无法访问
 
-核对完整 URL 的协议、端口、随机路径与订阅 ID。SSH 面板需要已建立的隧道；公网 HTTPS 面板需要放行面板端口。订阅更新失败时单独检查 2096 的网关服务与 DNS。
+核对完整 URL 的协议、端口、随机路径与订阅 ID。SSH 面板需要已建立的隧道；公网 HTTPS 面板需要放行面板端口。订阅更新失败时单独检查 38443 的网关服务与 DNS。
 
 ### 订阅首页或静态资源返回 404
 
@@ -184,9 +203,11 @@ ISP 的 UDP 被阻断，上游失败不会自动回退 Direct。配额独立计�
 
 ### Shadowrocket 连接失败
 
-历史明确验证的组合是 **Shadowrocket 2.2.92（3345）+ Xray-core 26.6.27**，来自此前双入站部署。当前新部署已反馈可用，但未记录本次客户端版本，因此不扩大版本兼容记录。
+历史明确验证的组合是 **Shadowrocket 2.2.92（3345）+ Xray-core 26.6.27**，来自此前双入站部署。0.3.0 的后续部署反馈未记录客户端版本；这些记录均不代表 0.4.0-rc.1 或新版核心已经通过真机验收。
 
-确认核心仍为固定的 26.6.27，核对 UUID、Vision flow、REALITY 公钥、SNI、Short ID、连接地址及端口。更换核心或客户端后，重新验证导入、联网、出口和额度刷新。
+核对实际核心与保存的 `XRAY_VERSION` 一致，并核对 UUID、Vision flow、REALITY 公钥、SNI、Short ID、地址及端口。新版 REALITY 要求握手携带 X25519MLKEM768；在 Shadowrocket 的节点 TLS 配置里检查实际指纹，不能把链接里的 `fp=chrome` 当作已兼容的证明。`minClientVer` 留空，不能靠任意降低版本限制解决所有指纹问题。升级或重新订阅后重新验证 Wi-Fi、蜂窝网络、出口、重连和额度刷新。
+
+参考：[Xray REALITY 配置](https://docs.sanaei.dev/zh/docs/config/reality/)、[Shadowrocket 2.2.93 开发记录](https://t.me/s/ShadowrocketNews?before=1642)。
 
 ### 安装或配置修改中断
 

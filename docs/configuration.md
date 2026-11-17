@@ -2,7 +2,7 @@
 
 [简体中文](configuration.zh-CN.md) | [Operations guide](operations.md) | [Security notes](security.md) | [Project home](../README.md)
 
-Start with [config.example.json](../config.example.json). Use `--config FILE` to select a private configuration file; otherwise, the installer reads `config.json` beside the script. All 19 public fields are listed below. Omitted optional fields use their defaults.
+Start with [config.example.json](../config.example.json). Use `--config FILE` to select a private configuration file; otherwise, the installer reads `config.json` beside the script. All 20 public fields are listed below. Omitted optional fields use their defaults.
 
 ## File format
 
@@ -36,6 +36,14 @@ The defaults provide Direct, an SSH-only panel, and unlimited traffic. Only `SER
 
 Installation preflight checks the REALITY target for TLS 1.3 and HTTP/2 support.
 
+## Xray test version
+
+| Field | Type | Default | Meaning and constraints |
+| --- | --- | --- | --- |
+| `XRAY_VERSION` | String | `"26.10.31"` | Only `26.10.31` and the historical comparison build `26.6.27`; both architectures have pinned official digests. No `latest` or custom URL |
+
+Fresh installation uses this field. Use `--switch-core` to apply it to an existing deployment of this candidate; other maintenance commands retain the deployed core. The old build is for compatibility comparison, not a claim of current security fixes.
+
 ## ISP upstream
 
 These settings apply only to modes that include ISP. Keep the default empty values for Direct-only mode.
@@ -58,7 +66,7 @@ The ISP route supports TCP and explicitly blocks UDP. Upstream failure does not 
 | Field | Type | Default | Meaning and constraints |
 | --- | --- | --- | --- |
 | `SUB_DOMAIN` | String | `""` | Your domain without a scheme, port, or path; when empty, subscriptions use the VPS public IP with an HTTPS certificate |
-| `PANEL_HTTPS` | Boolean | `false` | `false`: loopback-only panel accessed through SSH; `true`: public domain-based HTTPS panel, requiring `SUB_DOMAIN` |
+| `PANEL_HTTPS` | Boolean | `false` | **Recommended** `false`: loopback-only panel accessed through SSH; `true`: public domain-based HTTPS panel, requiring `SUB_DOMAIN` |
 | `ACME_EMAIL` | String | `""` | Optional certificate contact email; must have a valid email format when provided |
 
 When `SUB_DOMAIN` is set, its A record must point directly to `SERVER_IP`. Setting a domain while keeping `PANEL_HTTPS=false` uses the domain only for subscriptions; panel access stays behind the SSH tunnel. The public panel and Nginx subscriptions share a domain and certificate, with separate ports.
@@ -71,12 +79,12 @@ When `SUB_DOMAIN` is set, its A record must point directly to `SERVER_IP`. Setti
 | --- | --- | --- | --- |
 | `NODE_PORT` | Integer | `443` | Public VLESS + REALITY inbound shared by all active routes |
 | `PANEL_PORT` | Integer | `7777` | Panel port; loopback-only by default, public when `PANEL_HTTPS=true` |
-| `SUB_PORT` | Integer | `2096` | Public HTTPS subscription entry served by Nginx; allow it through the firewalls |
+| `SUB_PORT` | Integer | `38443` | Public HTTPS subscription entry served by Nginx; allow it through the firewalls |
 | `SUB_BACKEND_PORT` | Integer | `12096` | 3x-ui HTTP subscription backend bound only to `127.0.0.1`; **do not expose publicly** |
 
 All four listening ports must be integers from 1–65535 and distinct. None may use `80/TCP`, which is reserved for certificate issuance and renewal. VPS preflight also checks for conflicts with the actual SSH port and other processes. `ISP_PORT` is an outbound destination and does not need to differ from these four local listening ports.
 
-The default subscription path is `public 2096 HTTPS → Nginx → 127.0.0.1:12096 HTTP`. Client downloads and quota refreshes use the public `SUB_PORT`; do not put the backend port into client URLs. See [Security notes](security.md) for access-control rules and the [Operations guide](operations.md) for firewall and inspection commands.
+The default subscription path is `public 38443 HTTPS → Nginx → 127.0.0.1:12096 HTTP`. Client downloads and quota refreshes use the public `SUB_PORT`; do not put the backend port into client URLs. See [Security notes](security.md) for access-control rules and the [Operations guide](operations.md) for firewall and inspection commands.
 
 ## Monthly traffic quotas
 
@@ -110,7 +118,7 @@ Each example is a complete JSON object; omitted fields use defaults. Replace `YO
 
 This uses the default ports, IP-based HTTPS subscriptions, an SSH-only panel, and unlimited traffic.
 
-### Direct + ISP with domain subscriptions and a public HTTPS panel
+### Direct + ISP with domain subscriptions and the recommended SSH panel
 
 ```json
 {
@@ -123,14 +131,14 @@ This uses the default ports, IP-based HTTPS subscriptions, an SSH-only panel, an
   "ISP_USERNAME": "YOUR_ISP_USERNAME",
   "ISP_PASSWORD": "YOUR_ISP_PASSWORD",
   "SUB_DOMAIN": "node.example.com",
-  "PANEL_HTTPS": true,
+  "PANEL_HTTPS": false,
   "ACME_EMAIL": "you@example.com",
   "TOTAL_MONTHLY_GB": 1000,
   "ISP_MONTHLY_GB": 100
 }
 ```
 
-This allocates 900 GiB to Direct and 100 GiB to ISP. To keep domain subscriptions with an SSH-only panel, set `PANEL_HTTPS` to `false`.
+This allocates 900 GiB to Direct and 100 GiB to ISP. The panel stays private. A changing management-device IP does not require a source-IP allowlist for SSH key authentication. Only explicitly set `PANEL_HTTPS=true` if a public HTTPS panel is required.
 
 ## Applying changes after installation
 
@@ -140,11 +148,12 @@ Omitting a field read by an operation usually selects its default rather than re
 
 | Operation | Fields applied from JSON | Notes |
 | --- | --- | --- |
+| `--switch-core` | `XRAY_VERSION` | Replaces only the checksum-pinned Xray; rolls back on server-check failure and retains identity, database and quotas |
 | `--configure-domain` | `SUB_DOMAIN`, `PANEL_HTTPS`, `ACME_EMAIL` | Requires a nonempty domain; cannot clear the domain to return to IP-based subscriptions. An empty email preserves the previous email |
 | `--configure-nodes` | `NODE_NAME`, `NODE_MODE`, every `ISP_*` field, `TOTAL_MONTHLY_GB` | Includes upstream credentials and quotas; synchronize JSON first to avoid overwriting panel changes with stale values |
 | `--configure-traffic` | `TOTAL_MONTHLY_GB`, `ISP_MONTHLY_GB` | Uses the deployed route mode, preserving counters and the original reset day |
 
-All three operations require the JSON `SERVER_IP` to match the saved deployment. `NODE_PORT`, `PANEL_PORT`, `SUB_PORT`, `SUB_BACKEND_PORT`, and `REALITY_HOST` are taken from saved state and are not changed by these operations. Editing those values in JSON alone has no effect.
+All four operations require the JSON `SERVER_IP` to match the saved deployment. `NODE_PORT`, `PANEL_PORT`, `SUB_PORT`, `SUB_BACKEND_PORT`, and `REALITY_HOST` are taken from saved state and are not changed by these operations. Editing those values in JSON alone has no effect.
 
 `--repair-reality-target` is a separate repair operation. It reads saved deployment data and repairs the target to `www.cloudflare.com`, rather than applying a new target from JSON. `--show`, `--traffic-status`, and `--diagnose` also read saved server data and do not need a configuration file.
 

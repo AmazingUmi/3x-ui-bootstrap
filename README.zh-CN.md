@@ -20,11 +20,11 @@
 
 ```text
 客户端 ── 443/TCP ── Xray VLESS + REALITY ── Direct / ISP 出口
-客户端 ── 2096/TCP HTTPS ── Nginx ── 127.0.0.1:12096 HTTP ── 订阅后端
-管理员 ── SSH 隧道 ── 127.0.0.1:7777 ── 管理面板（默认）
+客户端 ── 38443/TCP HTTPS ── Nginx ── 127.0.0.1:12096 HTTP ── 订阅后端
+管理员 ── SSH 隧道 ── 127.0.0.1:7777 ── 管理面板（默认且推荐）
 ```
 
-域名可选；启用 `PANEL_HTTPS` 后，面板改为公网域名 HTTPS 入口。端口均可在新机配置中指定。订阅后端始终只绑定本机，不需要开放 `12096`。
+**默认且推荐 `PANEL_HTTPS=false`：面板仅本机监听，通过 SSH 密钥隧道管理，管理设备 IP 变化不需要更新来源白名单。** 域名可选；只有显式设置 `PANEL_HTTPS=true` 才会公开 HTTPS 面板。端口均可在新机配置中指定。订阅后端始终只绑定本机，不需要开放 `12096`。
 
 ## 快速入口
 
@@ -45,9 +45,11 @@ sudo bash ~/install-3x-ui.sh --config ~/config.json --install
 
 ## 版本与验证
 
-项目版本为 **0.3.0**。固定依赖：3x-ui **v3.10.2**、Xray-core **26.6.27**、Certbot **5.8.0**；Nginx 使用 Ubuntu / Debian 软件源中的版本。
+当前为 **0.4.0-rc.1 测试候选版**。默认固定依赖：3x-ui **v3.11.0**、Xray-core **26.10.31**、Certbot **5.9.0**；Nginx 使用 Ubuntu / Debian 软件源中的版本。`XRAY_VERSION` 可显式选择 **26.6.27** 做兼容对照；使用 `--switch-core` 受控切换，不能在面板内任意更新核心。
 
-2026-11-01 已收到新部署正常使用的反馈，并完成公网 IPv4 订阅暴露复测。客户端具体版本及未覆盖项目见[操作指南](docs/operations.zh-CN.md)和[安全说明](docs/security.zh-CN.md)。3x-ui 3.10.2 涉及上游已公布的安全问题，适用条件与修复版本也列在安全说明中。
+2026-11-17 用户已确认本候选版部署可用；所选核心、客户端版本和分项验收结果未记录。安装器的订阅格式检查和本机 Xray 自测不能代替客户端验收。检查范围与历史反馈见[操作指南](docs/operations.zh-CN.md)和[安全说明](docs/security.zh-CN.md)。
+
+默认订阅端口改为 `38443`，可以按需自定义；换端口不阻止全端口扫描，也不证明节点不会被 GFW 或信誉服务识别。系统安全更新、运行内核及重启状态需单独核对。
 
 开发检查运行 `bash scripts/check.sh`。贡献与发布约定见[贡献说明](CONTRIBUTING.zh-CN.md)，版本变化见[更新记录](CHANGELOG.zh-CN.md)。
 

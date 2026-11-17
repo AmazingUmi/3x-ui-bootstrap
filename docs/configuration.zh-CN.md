@@ -2,7 +2,7 @@
 
 [English](configuration.md) | [操作指南](operations.zh-CN.md) | [安全说明](security.zh-CN.md) | [项目首页](../README.md)
 
-配置模板为 [config.example.json](../config.example.json)，使用 `--config FILE` 指定私有配置文件；默认读取脚本同目录的 `config.json`。下文列出全部 19 个公开字段，省略可选字段时使用默认值。
+配置模板为 [config.example.json](../config.example.json)，使用 `--config FILE` 指定私有配置文件；默认读取脚本同目录的 `config.json`。下文列出全部 20 个公开字段，省略可选字段时使用默认值。
 
 ## 配置文件格式
 
@@ -36,6 +36,14 @@
 
 安装预检会验证 REALITY 目标的 TLS 1.3 和 HTTP/2 支持。
 
+## Xray 测试版本
+
+| 字段 | 类型 | 默认值 | 含义与约束 |
+| --- | --- | --- | --- |
+| `XRAY_VERSION` | 字符串 | `"26.10.31"` | 仅允许 `26.10.31` 和历史兼容对照 `26.6.27`；两种架构均固定官方发行包摘要，不接受 `latest` 或自定义下载地址 |
+
+新机按此字段安装；现有本候选版部署通过 `--switch-core` 应用。其他维护命令保留已部署核心版本。旧版本仅供兼容比较，不代表包含新版安全修复。
+
 ## ISP 上游
 
 以下字段仅在包含 ISP 的模式中生效。Direct 模式保持默认空值即可。
@@ -58,7 +66,7 @@ ISP 线路支持 TCP，UDP 明确阻断；上游失败时不会自动改走 Dire
 | 字段 | 类型 | 默认值 | 含义与约束 |
 | --- | --- | --- | --- |
 | `SUB_DOMAIN` | 字符串 | `""` | 自有域名，不带协议、端口或路径；留空时订阅使用 VPS 公网 IP 和 HTTPS 证书 |
-| `PANEL_HTTPS` | 布尔值 | `false` | `false`：面板只监听本机，经 SSH 隧道访问；`true`：使用域名公开 HTTPS 面板，必须填写 `SUB_DOMAIN` |
+| `PANEL_HTTPS` | 布尔值 | `false` | **推荐** `false`：面板只监听本机，经 SSH 隧道访问；`true`：使用域名公开 HTTPS 面板，必须填写 `SUB_DOMAIN` |
 | `ACME_EMAIL` | 字符串 | `""` | 可选的证书联系邮箱；填写时须为有效邮箱格式 |
 
 填写 `SUB_DOMAIN` 后，A 记录须直接指向 `SERVER_IP`。只填写域名、保持 `PANEL_HTTPS=false` 时，域名仅用于订阅，面板仍通过 SSH 隧道访问。公网面板与 Nginx 订阅使用同一域名和证书，各自保留独立端口。
@@ -71,12 +79,12 @@ ISP 线路支持 TCP，UDP 明确阻断；上游失败时不会自动改走 Dire
 | --- | --- | --- | --- |
 | `NODE_PORT` | 整数 | `443` | 公网 VLESS + REALITY 入站，所有启用线路共用 |
 | `PANEL_PORT` | 整数 | `7777` | 面板端口；默认仅本机，`PANEL_HTTPS=true` 时公开 |
-| `SUB_PORT` | 整数 | `2096` | Nginx 公网 HTTPS 订阅入口，需要防火墙放行 |
+| `SUB_PORT` | 整数 | `38443` | Nginx 公网 HTTPS 订阅入口，需要防火墙放行 |
 | `SUB_BACKEND_PORT` | 整数 | `12096` | 3x-ui HTTP 订阅后端，仅绑定 `127.0.0.1`，**不要公网放行** |
 
 四个监听端口均须为 1–65535 的整数，彼此不同，不能使用证书签发与续期所需的 `80/TCP`。VPS 预检还会检查它们是否与实际 SSH 端口或其他进程冲突。`ISP_PORT` 是出站目标端口，不受这四个本机监听端口的互斥限制。
 
-默认订阅链路为 `公网 2096 HTTPS → Nginx → 127.0.0.1:12096 HTTP`。客户端下载和额度刷新使用公网 `SUB_PORT`；不要把后端端口填入客户端。访问控制规则见[安全说明](security.zh-CN.md)，放行和检查命令见[操作指南](operations.zh-CN.md)。
+默认订阅链路为 `公网 38443 HTTPS → Nginx → 127.0.0.1:12096 HTTP`。客户端下载和额度刷新使用公网 `SUB_PORT`；不要把后端端口填入客户端。访问控制规则见[安全说明](security.zh-CN.md)，放行和检查命令见[操作指南](operations.zh-CN.md)。
 
 ## 月流量配额
 
@@ -110,7 +118,7 @@ ISP 线路支持 TCP，UDP 明确阻断；上游失败时不会自动改走 Dire
 
 该配置使用默认端口、IP HTTPS 订阅、SSH 面板和不限流量。
 
-### Direct + ISP、域名订阅及公网 HTTPS 面板
+### Direct + ISP、域名订阅及推荐的 SSH 面板
 
 ```json
 {
@@ -123,28 +131,29 @@ ISP 线路支持 TCP，UDP 明确阻断；上游失败时不会自动改走 Dire
   "ISP_USERNAME": "YOUR_ISP_USERNAME",
   "ISP_PASSWORD": "YOUR_ISP_PASSWORD",
   "SUB_DOMAIN": "node.example.com",
-  "PANEL_HTTPS": true,
+  "PANEL_HTTPS": false,
   "ACME_EMAIL": "you@example.com",
   "TOTAL_MONTHLY_GB": 1000,
   "ISP_MONTHLY_GB": 100
 }
 ```
 
-此配置分配 Direct 900 GiB、ISP 100 GiB。若只需要域名订阅和 SSH 面板，把 `PANEL_HTTPS` 改为 `false`。
+此配置分配 Direct 900 GiB、ISP 100 GiB，面板保持仅本机访问。管理设备 IP 变化不影响 SSH 密钥认证，无需固定来源 IP 白名单。只有确实需要公网 HTTPS 面板时，才显式设置 `PANEL_HTTPS=true`。
 
 ## 安装后如何应用修改
 
-编辑 JSON 不会立即修改运行中的服务。当前版本的三类配置操作只读取各自负责的字段；完整命令见[操作指南](operations.zh-CN.md)。
+编辑 JSON 不会立即修改运行中的服务。当前版本的配置操作只读取各自负责的字段；完整命令见[操作指南](operations.zh-CN.md)。
 
 对操作读取的字段，省略通常表示使用默认值，不表示保留服务器旧值；邮箱的例外见下表。维护时应使用与当前部署一致的完整候选配置，避免把最小安装示例直接用于修改现有线路。
 
 | 操作 | 从 JSON 应用的字段 | 特别说明 |
 | --- | --- | --- |
+| `--switch-core` | `XRAY_VERSION` | 只更换已固定摘要的 Xray；服务端验收失败自动回退，保留身份、数据库及配额 |
 | `--configure-domain` | `SUB_DOMAIN`、`PANEL_HTTPS`、`ACME_EMAIL` | 域名必须非空；不能用此操作清空域名退回 IP 订阅。邮箱留空时保留原邮箱 |
 | `--configure-nodes` | `NODE_NAME`、`NODE_MODE`、全部 `ISP_*` 字段、`TOTAL_MONTHLY_GB` | 包含 ISP 账号及配额；先同步 JSON，避免用旧参数覆盖面板中的修改 |
 | `--configure-traffic` | `TOTAL_MONTHLY_GB`、`ISP_MONTHLY_GB` | 按当前已部署线路模式修改额度，保留计数和原部署重置日 |
 
-三类操作都要求 JSON 中的 `SERVER_IP` 与部署记录一致。`NODE_PORT`、`PANEL_PORT`、`SUB_PORT`、`SUB_BACKEND_PORT` 和 `REALITY_HOST` 沿用部署记录，不通过这些操作修改；仅编辑 JSON 中的这些值不会生效。
+这些操作都要求 JSON 中的 `SERVER_IP` 与部署记录一致。`NODE_PORT`、`PANEL_PORT`、`SUB_PORT`、`SUB_BACKEND_PORT` 和 `REALITY_HOST` 沿用部署记录，不通过这些操作修改；仅编辑 JSON 中的这些值不会生效。
 
 `--repair-reality-target` 是单独的修复操作，使用保存的部署数据，将目标修复为 `www.cloudflare.com`，不读取 JSON 中的新目标。`--show`、`--traffic-status` 和 `--diagnose` 也使用服务器保存的数据，无需配置文件。
 

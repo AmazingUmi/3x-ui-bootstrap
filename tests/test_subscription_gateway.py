@@ -327,5 +327,21 @@ class SubscriptionGatewayIPHTTP(GatewayProcessFixture, unittest.TestCase):
         self.assertEqual(self.config_data["SUB_DOMAIN"], "")
 
 
+@unittest.skipUnless(shutil.which("nginx") and shutil.which("openssl"),
+                     "real gateway checks require local nginx and openssl")
+class SubscriptionGatewayLimits(GatewayProcessFixture, unittest.TestCase):
+    def test_repeated_valid_downloads_are_limited_before_backend(self):
+        statuses = [self.request("/sub/" + "a" * 16)[0] for _ in range(40)]
+        self.assertIn(200, statuses)
+        self.assertIn(429, statuses)
+        self.assertEqual(set(statuses), {200, 429})
+        self.assertEqual(len(self.backend.requests), statuses.count(200))
+        # Even after the valid-download budget is exhausted, forbidden paths
+        # still return 404 and cannot reach the subscription backend.
+        before = len(self.backend.requests)
+        self.assertEqual(self.request("/assets/AppSidebar.js")[0], 404)
+        self.assertEqual(len(self.backend.requests), before)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,22 +42,29 @@ if sys.version_info < (3, 10):
     raise SystemExit("需要 Python 3.10+；服务器请使用 Ubuntu 22.04+ 或 Debian 12+。")
 from zoneinfo import ZoneInfo
 
-PROJECT_VERSION = "0.3.0"
+PROJECT_VERSION = "0.4.0-rc.1"
 MODE = "--install"
 INPUT_CONFIG = None
 
-VERSION = "v3.10.2"
-CORE_VERSION = "26.6.27"
-CERTBOT_VERSION = "5.8.0"
-CERTBOT_WHEEL_URL = "https://files.pythonhosted.org/packages/71/a9/7742882b276c06e430fb23da13e4512b3cd89d4aa6fb9ddfd7b96812bbff/certbot-5.8.0-py3-none-any.whl"
-CERTBOT_SHA256 = "c06793e6a0169b07ee09e11e6a017c7d5a77310055d693fffd66c53363ab87ff"
-CORE_ASSETS = {
-    "amd64": ("Xray-linux-64.zip", "b3e5902d06d6282fe53cfa2fc426058b9aeaa429b2c812e20887cd47f26d08bf"),
-    "arm64": ("Xray-linux-arm64-v8a.zip", "13a251379bea366c2cf10363ad71e75734193d401f26f518bf0c25e5c8f8c931"),
+VERSION = "v3.11.0"
+CORE_VERSION = "26.10.31"
+CERTBOT_VERSION = "5.9.0"
+CERTBOT_WHEEL_URL = "https://files.pythonhosted.org/packages/28/8d/338872b2d2416c86c2541e2e6d6e851be0859fb571cd6ec57cd322477022/certbot-5.9.0-py3-none-any.whl"
+CERTBOT_SHA256 = "b7adb889d4dc5ee81bc4b606de2576c564e701d6addef3b8685e90e2a4991299"
+# Only these official, checksum-pinned builds may be installed or selected.
+CORE_RELEASES = {
+    "26.10.31": {
+        "amd64": ("Xray-linux-64.zip", "e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214"),
+        "arm64": ("Xray-linux-arm64-v8a.zip", "1811c8f1da0c3b6dc707ebaf1c8390e987ba39859a8f0a7aadd8526157f2ec8d"),
+    },
+    "26.6.27": {
+        "amd64": ("Xray-linux-64.zip", "b3e5902d06d6282fe53cfa2fc426058b9aeaa429b2c812e20887cd47f26d08bf"),
+        "arm64": ("Xray-linux-arm64-v8a.zip", "13a251379bea366c2cf10363ad71e75734193d401f26f518bf0c25e5c8f8c931"),
+    },
 }
 DIGESTS = {
-    "amd64": "bfda7921984e7a72555c38d4e861c7a8b67b3686b658608937de99682f1452d0",
-    "arm64": "a867c65ce52ad49f6504dd4c9c395337dc92ba57ae478da4f1b7ddb624014ed5",
+    "amd64": "0ddfa4702f595442e2962acd81addc768fdacaa4ff2672c971a0463dae744916",
+    "arm64": "f50b4c30fd919d018f2f4c3d8db53a4ca027503d581328727770afb116a79d90",
 }
 STATE_DIR = Path("/var/lib/3x-ui-bootstrap")
 APP = Path("/usr/local/x-ui")
@@ -71,9 +78,10 @@ NGINX_UNIT = Path("/etc/systemd/system/3x-ui-subscription.service")
 NGINX_CONF = STATE_DIR / "nginx.conf"
 NGINX_PID = Path("/run/3x-ui-subscription/nginx.pid")
 NGINX_ERROR_LOG = STATE_DIR / "nginx-error.log"
+LOGROTATE_CONF = Path("/etc/logrotate.d/3x-ui-bootstrap")
 LEGACY_QUOTA_SERVICE = Path("/etc/systemd/system/3x-ui-quota.service")
 LEGACY_QUOTA_TIMER = Path("/etc/systemd/system/3x-ui-quota.timer")
-OWNER = "3x-ui-bootstrap-v6"
+OWNER = "3x-ui-bootstrap-v7"
 ENV = {k: v for k, v in os.environ.items() if not k.startswith(("XUI_", "BOOTSTRAP_"))}
 ENV.update(XUI_DB_TYPE="sqlite", XUI_DB_FOLDER="/etc/x-ui",
            XUI_LOG_FOLDER="/var/log/x-ui", XUI_BIN_FOLDER=str(APP / "bin"),
@@ -92,14 +100,14 @@ CONFIG_DEFAULTS = {
     "NODE_NAME": "MyNode", "NODE_MODE": "direct", "NODE_PORT": 443,
     "ISP_PROTOCOL": "socks5", "ISP_HOST": "",
     "ISP_PORT": None, "ISP_USERNAME": "", "ISP_PASSWORD": "", "ISP_EXPECTED_IP": "",
-    "PANEL_PORT": 7777, "SUB_PORT": 2096, "SUB_BACKEND_PORT": 12096,
+    "PANEL_PORT": 7777, "SUB_PORT": 38443, "SUB_BACKEND_PORT": 12096,
     "SUB_DOMAIN": "", "PANEL_HTTPS": False,
     "TOTAL_MONTHLY_GB": 0, "ISP_MONTHLY_GB": 0, "ACME_EMAIL": "",
-    "REALITY_HOST": "www.cloudflare.com",
+    "REALITY_HOST": "www.cloudflare.com", "XRAY_VERSION": CORE_VERSION,
 }
 CONFIG_KEYS = frozenset(CONFIG_DEFAULTS) | {"SERVER_IP"}
 CONFIG_MODES = frozenset(("--install", "--check", "--validate-config", "--configure-domain",
-                          "--configure-nodes", "--configure-traffic"))
+                          "--configure-nodes", "--configure-traffic", "--switch-core"))
 
 
 def reject_duplicate_keys(pairs):
@@ -172,6 +180,9 @@ def config_from_file():
 
 def parse_config(values):
     c = dict(values)
+    c.setdefault("XRAY_VERSION", CORE_VERSION)
+    require(c["XRAY_VERSION"] in CORE_RELEASES,
+            "XRAY_VERSION 只能选择已固定摘要的版本：" + ", ".join(CORE_RELEASES))
     c.setdefault("NODE_MODE", "direct")
     require(c["NODE_MODE"] in ("direct", "direct+isp", "isp"),
             "NODE_MODE 只能填写 direct、direct+isp 或 isp。")
@@ -412,6 +423,24 @@ def sockets():
     return rows
 
 
+def report_system_security(os_release, ssh_settings=""):
+    """Read-only evidence, not a CVE scanner or an automatic OS/SSH upgrade."""
+    pretty = re.search(r'^PRETTY_NAME=["\']?([^"\'\n]+)', os_release, re.M)
+    print("系统：" + (pretty[1] if pretty else "Ubuntu / Debian") + "；运行内核：" + platform.release(), flush=True)
+    print("系统补丁需单独维护：安装依赖和更新 Xray 不等于修复 Linux 内核漏洞。", flush=True)
+    if Path("/run/reboot-required").exists():
+        print("待重启：系统存在 /run/reboot-required；请安排重启后核对运行内核。", flush=True)
+    else:
+        print("未发现待重启标记；这不能证明内核已包含全部安全修复。", flush=True)
+    auth = dict(re.findall(r"^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication) (\S+)$",
+                           ssh_settings, re.M))
+    if auth.get("passwordauthentication") == "yes" or auth.get("kbdinteractiveauthentication") == "yes":
+        print("SSH 允许密码或交互认证；确认密钥登录可用后再收紧。脚本不会修改 SSH。", flush=True)
+    elif auth:
+        print("SSH 基础配置未启用密码/交互认证；仍需检查 Match 条件与实际密钥登录。", flush=True)
+    print("推荐面板仅本机 + SSH 密钥隧道；管理设备 IP 变化不需要修改来源白名单。", flush=True)
+
+
 def check_environment(c, owned):
     require(sys.version_info >= (3, 10), "需要系统 Python 3.10+；请使用 Ubuntu 22.04+ 或 Debian 12+。")
     os_release = Path("/etc/os-release").read_text()
@@ -422,7 +451,7 @@ def check_environment(c, owned):
     require(shutil.which("apt-get") and shutil.which("systemctl") and shutil.which("ss"),
             "缺少 apt-get、systemctl 或 ss（iproute2）。")
     if not owned:
-        paths = [APP, DB.parent, UNIT, RENEW_SERVICE, RENEW_TIMER, NGINX_UNIT,
+        paths = [APP, DB.parent, UNIT, RENEW_SERVICE, RENEW_TIMER, NGINX_UNIT, LOGROTATE_CONF,
                  Path("/etc/nginx"), Path("/etc/systemd/system/nginx.service"),
                  Path("/usr/bin/x-ui"), Path("/etc/default/x-ui")]
         existing_unit = subprocess.run(["systemctl", "cat", "x-ui.service"],
@@ -437,12 +466,17 @@ def check_environment(c, owned):
                     "内部订阅服务必须只监听 127.0.0.1。")
     # 即使 sshd 暂未监听，也拒绝其配置端口；不修改任何 SSH 设置。
     sshd = shutil.which("sshd") or "/usr/sbin/sshd"
+    ssh_settings = ""
     if Path(sshd).exists():
         p = subprocess.run([sshd, "-T"], text=True, capture_output=True)
         require(p.returncode == 0, "无法读取 sshd 有效配置，请先检查 SSH 服务。")
+        ssh_settings = p.stdout
         ssh_ports = {int(x) for x in re.findall(r"^port (\d+)$", p.stdout, re.M)}
         require(not ssh_ports.intersection(node_ports(c) + [c["PANEL_PORT"], c["SUB_PORT"], c["SUB_BACKEND_PORT"]]),
                 "配置端口与 SSH 端口冲突。")
+    report_system_security(os_release, ssh_settings)
+    if core_version(c) != CORE_VERSION:
+        print("所选 Xray 是历史兼容对照版本；不能据此认为已包含新版安全修复。", flush=True)
     return arch
 
 
@@ -465,11 +499,12 @@ def firewall_instructions(c):
     lines.append("  Nginx HTTPS 订阅：" + str(c["SUB_PORT"]) + "/TCP")
     lines.append("  内部订阅：127.0.0.1:" + str(c["SUB_BACKEND_PORT"]) + "，无需公网放行")
     if c.get("PANEL_HTTPS"):
-        lines.append("  域名 HTTPS 面板：" + str(c["PANEL_PORT"]) + "/TCP（允许管理设备来源 IP）")
+        lines.append("  公网 HTTPS 面板（显式选择）：" + str(c["PANEL_PORT"]) + "/TCP；推荐改为 PANEL_HTTPS=false")
     else:
-        lines.append("  面板：" + str(c["PANEL_PORT"]) + " 仅本机，通过 SSH 隧道访问，无需公网放行")
+        lines.append("  面板：" + str(c["PANEL_PORT"]) + " 仅本机（默认推荐），通过 SSH 隧道访问，无需公网放行")
     lines += ["  证书签发与自动续期：80/TCP",
-              "保留实际 SSH 端口的访问规则；脚本不自动修改防火墙。"]
+              "保留实际 SSH 端口的访问规则；检查 IPv4 / IPv6，脚本不自动修改防火墙。",
+              "自定义订阅端口只能减少针对常用端口的探测，不能阻止全端口扫描。"]
     return "\n".join(lines) + "\n"
 
 
@@ -693,18 +728,30 @@ def install_release(arch):
     (APP / "bin" / ("xray-linux-" + arch)).chmod(0o700)
 
 
-def verify_core(arch):
+def core_version(c):
+    version = c.get("XRAY_VERSION", CORE_VERSION)
+    require(version in CORE_RELEASES, "安装记录中的 Xray 版本不在固定摘要列表中。")
+    return version
+
+
+def verify_core(arch, version=CORE_VERSION):
     output = run([str(APP / "bin" / ("xray-linux-" + arch)), "version"], capture=True, cwd=APP)
-    require(re.search(r"(?m)^Xray " + re.escape(CORE_VERSION) + r"(?:\s|$)", output),
-            "Xray-core 版本不符，要求 " + CORE_VERSION + "；请勿自动更新核心。")
+    require(version in CORE_RELEASES and re.search(r"(?m)^Xray " + re.escape(version) + r"(?:\s|$)", output),
+            "Xray-core 版本不符，要求 " + version + "；请使用 --switch-core，勿在面板中自动更新核心。")
 
 
-def install_core(arch):
-    require(not service_active(), "替换 Xray-core 前，x-ui 必须处于停止状态。")
-    name, digest = CORE_ASSETS[arch]
-    archive = STATE_DIR / ("xray-" + CORE_VERSION + "-" + arch + ".zip")
-    url = "https://github.com/XTLS/Xray-core/releases/download/v" + CORE_VERSION + "/" + name
+def download_core(arch, version):
+    require(version in CORE_RELEASES and arch in CORE_RELEASES[version], "不支持的核心版本或架构。")
+    name, digest = CORE_RELEASES[version][arch]
+    archive = STATE_DIR / ("xray-" + version + "-" + arch + ".zip")
+    url = "https://github.com/XTLS/Xray-core/releases/download/v" + version + "/" + name
     download_verified(url, archive, digest)
+    return archive
+
+
+def install_core(arch, version=CORE_VERSION):
+    require(not service_active(), "替换 Xray-core 前，x-ui 必须处于停止状态。")
+    archive = download_core(arch, version)
     binary = APP / "bin" / ("xray-linux-" + arch)
     fd, tmp = tempfile.mkstemp(prefix=".xray-", dir=binary.parent)
     try:
@@ -718,7 +765,75 @@ def install_core(arch):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-    verify_core(arch)
+    verify_core(arch, version)
+
+
+def switch_core(c, state, arch):
+    """Switch only the pinned Xray binary; never restore or rewrite the panel DB."""
+    require(state.get("phase") == "complete" and state.get("api_token"), "请先完成当前版本的基础安装。")
+    target = config_values()["XRAY_VERSION"]
+    require(target in CORE_RELEASES, "XRAY_VERSION 不在固定摘要列表中。")
+    path = STATE_DIR / "core-change.json"
+    plan = json.loads(path.read_text()) if path.exists() else None
+    pending = plan is not None and plan.get("status") not in ("complete", "rolled_back")
+    if pending:
+        require(plan.get("owner") == OWNER and plan.get("uuid") == state["uuid"]
+                and c in (plan["old_config"], plan["new_config"])
+                and target == core_version(plan["new_config"]),
+                "核心切换尚未完成，请使用原 XRAY_VERSION 和 --switch-core 续跑。")
+        old_config, new_config = plan["old_config"], plan["new_config"]
+    else:
+        old_config, new_config = c, dict(c, XRAY_VERSION=target)
+        verify_core(arch, core_version(old_config))
+        if old_config == new_config:
+            print("核心已是所选固定版本：" + target + "；未替换文件。", flush=True)
+            return
+        plan = {"owner": OWNER, "uuid": state["uuid"], "status": "prepared",
+                "old_config": old_config, "new_config": new_config}
+    check_db(c, state)
+    # Obtain and verify BOTH builds while the current node is still available.
+    # Rollback must not depend on a new download after the service is stopped.
+    download_core(arch, core_version(old_config))
+    download_core(arch, target)
+    atomic_write(path, json.dumps(plan, indent=2) + "\n")
+    print("切换 Xray " + core_version(old_config) + " → " + target + "；节点会短暂中断。", flush=True)
+    if target != CORE_VERSION:
+        print("兼容对照版本仅用于测试；不表示已包含新版安全修复。", flush=True)
+    try:
+        run(["systemctl", "stop", NGINX_SERVICE])
+        run(["systemctl", "stop", "x-ui"])
+        install_core(arch, target)
+        run([str(APP / "bin" / ("xray-linux-" + arch)), "run", "-test", "-config",
+             str(APP / "bin/config.json")], cwd=APP)
+        run(["systemctl", "start", "x-ui"])
+        wait_api(API(new_config, state))
+        run(["systemctl", "start", NGINX_SERVICE])
+        verify_runtime(new_config, state, arch)
+        state.update(config=new_config, core_version=target)
+        save(state)
+        result = write_results(new_config, state)
+        plan["status"] = "complete"
+        atomic_write(path, json.dumps(plan, indent=2) + "\n")
+    except Exception as error:
+        try:
+            run(["systemctl", "stop", NGINX_SERVICE])
+            run(["systemctl", "stop", "x-ui"])
+            install_core(arch, core_version(old_config))
+            run(["systemctl", "start", "x-ui"])
+            wait_api(API(old_config, state))
+            run(["systemctl", "start", NGINX_SERVICE])
+            verify_runtime(old_config, state, arch)
+            state.update(config=old_config, core_version=core_version(old_config))
+            save(state)
+            write_results(old_config, state)
+            plan["status"] = "rolled_back"
+            atomic_write(path, json.dumps(plan, indent=2) + "\n")
+        except Exception as rollback_error:
+            # Keep the prepared transaction for a retry; do not claim recovery.
+            raise RuntimeError("核心切换和自动回退未完成；保留切换记录，请用原参数续跑 --switch-core 并检查私有日志。") from rollback_error
+        raise RuntimeError("新核心未通过服务端验收，已回退到 " + core_version(old_config)
+                           + "；数据库、客户端身份和配额未由切换命令重写。") from error
+    print("核心切换完成；仍需 Shadowrocket / Mihomo 真机验收。\n" + result, flush=True)
 
 
 def subscription_paths(c, state):
@@ -759,6 +874,8 @@ def render_subscription_nginx(c, state):
         "events { worker_connections 1024; }",
         "http {",
         "    access_log off;", "    server_tokens off;", "    default_type application/octet-stream;",
+        "    limit_req_zone $binary_remote_addr zone=sub_requests:1m rate=1r/s;",
+        "    limit_conn_zone $binary_remote_addr zone=sub_connections:1m;",
         "    server_names_hash_bucket_size 256;",
         # $request_uri retains the original encoding and query. An exact
         # location alone would also match normalized aliases and ?html=1.
@@ -776,6 +893,9 @@ def render_subscription_nginx(c, state):
         "        client_max_body_size 1k;",
         "        client_header_timeout 10s;", "        client_body_timeout 10s;",
         "        keepalive_timeout 15s;",
+        "        limit_req zone=sub_requests burst=20 nodelay;",
+        "        limit_req_status 429;", "        limit_req_log_level notice;",
+        "        limit_conn sub_connections 16;", "        limit_conn_status 429;",
         "        if ($host != " + host + ") { return 404; }",
         "        if ($subscription_allowed = 0) { return 404; }",
         "        if ($request_method !~ ^(GET|HEAD)$) { return 404; }",
@@ -818,6 +938,18 @@ def render_subscription_unit():
         "KillSignal=SIGQUIT\nTimeoutStopSec=15s\nRestart=on-failure\nRestartSec=5\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )
+
+
+def install_log_rotation():
+    require(not LOGROTATE_CONF.is_symlink(), "日志轮转配置不能是符号链接。")
+    text = (str(NGINX_ERROR_LOG) + " {\n"
+            "    daily\n    maxsize 10M\n    rotate 7\n    missingok\n    notifempty\n"
+            "    compress\n    delaycompress\n    create 0600 root root\n    sharedscripts\n"
+            "    postrotate\n"
+            "        /bin/systemctl kill --kill-who=main --signal=USR1 " + NGINX_SERVICE
+            + ".service >/dev/null 2>&1 || true\n    endscript\n}\n")
+    atomic_write(LOGROTATE_CONF, text)
+    LOGROTATE_CONF.chmod(0o644)
 
 
 def install_subscription_gateway(c, state):
@@ -885,7 +1017,7 @@ def harden_initial_db(c, state):
          "-listenIP", initial_settings(c, state)["webListen"], "-username", state["username"],
          "-password", state["password"], "-webBasePath", state["base_path"]], cwd=APP)
     require(DB.is_file(), "CLI 未生成预期 SQLite 数据库。")
-    # v3.10.2 的 CLI 没有订阅开关；仅在服务启动前更新 settings 表，节点通过 API 创建。
+    # 固定版本的 CLI 没有订阅开关；仅在服务启动前更新 settings 表，节点通过 API 创建。
     safe = initial_settings(c, state)
     with contextlib.closing(sqlite3.connect(DB)) as db, db:
         cols = {row[1] for row in db.execute("PRAGMA table_info(settings)")}
@@ -905,7 +1037,7 @@ def check_db(c, state):
 
 def write_unit(c):
     unit = """[Unit]
-Description=3X-UI (loopback subscription backend, bootstrap v6)
+Description=3X-UI (loopback subscription backend, bootstrap v7)
 After=network-online.target
 Wants=network-online.target
 
@@ -1416,6 +1548,7 @@ def verify_subscription(c, state):
 
 
 def verify_shadowrocket(c, state):
+    """Validate exported data only; this never runs the Shadowrocket app."""
     status, raw, headers = https_request(c["SUB_PORT"], c["SUB_HOST"], state.get("raw_sub_path", "/sub/") + state["sub_id"],
                                         user_agent="Shadowrocket", return_headers=True)
     require(status == 200, "Shadowrocket 订阅未返回 HTTP 200。")
@@ -1572,9 +1705,9 @@ def probe_reality_target(c, state, arch, host, existing_port=None, expected_exit
 def diagnose_node(c, state, arch):
     binary = APP / "bin" / ("xray-linux-" + arch)
     version = subprocess.run([str(binary), "version"], text=True, capture_output=True, timeout=5)
-    require(version.returncode == 0 and re.search(r"\bXray " + re.escape(CORE_VERSION) + r"\b", version.stdout),
-            "现有核心不是要求的 " + CORE_VERSION + "；诊断不会更新核心。")
-    print("临时副本诊断，Xray-core " + CORE_VERSION + "；读取已保存的配置。", flush=True)
+    require(version.returncode == 0 and re.search(r"\bXray " + re.escape(core_version(c)) + r"\b", version.stdout),
+            "现有核心不是要求的 " + core_version(c) + "；诊断不会更新核心。")
+    print("临时副本诊断，Xray-core " + core_version(c) + "；读取已保存的配置。", flush=True)
     print("现有服务、数据库、节点和安装记录不变；临时端口只监听 127.0.0.1。", flush=True)
     current = probe_reality_target(c, state, arch, c["REALITY_HOST"])
     alternate = None
@@ -1595,7 +1728,7 @@ def verify_runtime(c, state, arch):
     try:
         check_db(c, state)
         check_subscription_gateway(c, state)
-        verify_core(arch)
+        verify_core(arch, core_version(c))
         validate_tls(c)
         require(service_active(), "x-ui 服务未运行。")
     except Exception:
@@ -1681,7 +1814,7 @@ def write_results(c, state):
             atomic_write(STATE_DIR / "vless.txt", link + "\n")
             atomic_write(STATE_DIR / "mihomo-url.txt", sub_link + "\n")
     result += ("3X-UI：" + VERSION + "\n"
-        "Xray-core：" + CORE_VERSION + "（Shadowrocket 兼容固定版本）\n"
+        "Xray-core：" + core_version(c) + "（固定摘要；客户端兼容性待真机验收）\n"
         "线路模式：" + c.get("NODE_MODE", "direct") + "（共享 " + str(c["NODE_PORT"]) + "/TCP，按客户端分流）\n"
         "REALITY 目标 / SNI：" + c["REALITY_HOST"] + "\n"
         "面板监听：" + ("0.0.0.0:" if public_panel else "127.0.0.1:") + str(c["PANEL_PORT"]) +
@@ -1692,7 +1825,7 @@ def write_results(c, state):
         "已验证：未耗尽配额线路的本机 REALITY/VLESS/Vision 认证、HTTPS 转发与出口检查。\n"
         "下一步：客户端使用本次 Mihomo 订阅或 VLESS 链接；" +
         ("浏览器打开上面的完整 HTTPS 面板地址。\n" if public_panel else "面板通过 SSH 隧道管理。\n") +
-        "尚未验证：客户端公网连接、客户端代理效果和实际出口。\n"
+        "尚未验证：Shadowrocket / Mihomo 真机公网连接、TLS 指纹兼容性和客户端实际出口。\n"
         "结果：/var/lib/3x-ui-bootstrap/result.txt（仅 root 可读）\n")
     if "TRAFFIC_BUDGET" in c:
         result += "\n" + traffic_status(c, state)
@@ -1705,7 +1838,7 @@ def repair_reality_target(c, state, arch):
     require(state.get("files_installed") and state.get("panel_ready") and state.get("api_token")
             and all(state.get(k) for k in ("uuid", "private_key", "public_key", "short_id")),
             "基础安装或身份记录不完整；修复不会重新安装或生成密钥。")
-    verify_core(arch)
+    verify_core(arch, core_version(c))
     check_db(c, state)
     validate_tls(c)
     require(service_active(), "x-ui 未运行；请先检查并启动已有服务。")
@@ -1833,7 +1966,7 @@ def configure_domain(c, state, arch):
     new_config = domain_config(c)
     print(firewall_instructions(new_config), flush=True)
     check_isp(new_config)
-    verify_core(arch)
+    verify_core(arch, core_version(c))
     path = STATE_DIR / "domain-change.json"
     plan = None
     if path.exists():
@@ -2036,7 +2169,7 @@ def configure_nodes(c, state, arch):
     check_environment(new_config, True)
     print(firewall_instructions(new_config), flush=True)
     check_isp(new_config)
-    verify_core(arch)
+    verify_core(arch, core_version(c))
     validate_tls(new_config)
     api = API(c, state)
     path = STATE_DIR / "node-change.json"
@@ -2131,7 +2264,7 @@ def configure_nodes(c, state, arch):
 def main():
     mode = MODE
     saved_config_mode = mode in ("--diagnose", "--repair-reality-target", "--configure-domain", "--configure-nodes",
-                                 "--configure-traffic", "--traffic-status")
+                                 "--configure-traffic", "--traffic-status", "--switch-core")
     c = None if saved_config_mode else config_from_file()
     state_file = STATE_DIR / "state.json"
     state = None
@@ -2152,7 +2285,14 @@ def main():
                         "配置中的 SERVER_IP 与此部署不一致；停止修改，请确认配置文件和目标服务器。")
         else:
             require(mode == "--check" or state.get("config") == c,
-                    "参数与已有安装不一致；线路使用 --configure-nodes，域名使用 --configure-domain，配额使用 --configure-traffic。")
+                    "参数与已有安装不一致；线路使用 --configure-nodes，域名使用 --configure-domain，配额使用 --configure-traffic，核心使用 --switch-core。")
+    core_path = STATE_DIR / "core-change.json"
+    if core_path.exists():
+        core_plan = json.loads(core_path.read_text())
+        require(core_plan.get("owner") == OWNER and state is not None and core_plan.get("uuid") == state["uuid"],
+                "核心切换记录不属于当前部署。")
+        require(core_plan.get("status") in ("complete", "rolled_back") or mode == "--switch-core",
+                "核心切换尚未完成，请使用原参数和 --switch-core 续跑。")
     if mode == "--traffic-status":
         require(state is not None and state.get("api_token"), "没有可查询的已部署面板。")
         require("TRAFFIC_LIMITS" not in c, "旧共享额度尚未迁移；请先用 --configure-traffic 设置原生配额。")
@@ -2174,7 +2314,7 @@ def main():
     if node_path.exists() and mode != "--configure-nodes":
         require(json.loads(node_path.read_text()).get("status") == "complete",
                 "线路配置尚未完成；请使用 --configure-nodes 续跑。")
-    if mode in ("--repair-reality-target", "--configure-domain", "--configure-nodes", "--configure-traffic"):
+    if mode in ("--repair-reality-target", "--configure-domain", "--configure-nodes", "--configure-traffic", "--switch-core"):
         require(state is not None, "没有找到本安装器保存的部署，无法执行现有部署配置。")
         arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine())
         require(arch in DIGESTS, "仅支持 amd64 / arm64。")
@@ -2186,11 +2326,11 @@ def main():
             fresh = json.loads(state_file.read_text())
             require(fresh.get("owner") == OWNER and fresh.get("version") == VERSION, "安装记录已变化，停止修复。")
             repair_path = STATE_DIR / "reality-target-repair.json"
-            if mode in ("--configure-domain", "--configure-nodes", "--configure-traffic"):
+            if mode in ("--configure-domain", "--configure-nodes", "--configure-traffic", "--switch-core"):
                 require(not repair_path.exists() or json.loads(repair_path.read_text()).get("status") == "complete",
                         "目标修复尚未完成；请先用 --repair-reality-target 续跑。")
                 operation = {"--configure-domain": configure_domain, "--configure-nodes": configure_nodes,
-                             "--configure-traffic": configure_traffic}[mode]
+                             "--configure-traffic": configure_traffic, "--switch-core": switch_core}[mode]
                 operation(fresh["config"], fresh, arch)
             else:
                 repair_reality_target(fresh["config"], fresh, arch)
@@ -2239,14 +2379,15 @@ def main():
             # This VPS is dedicated to the bootstrap. Prevent the distro's
             # default site from starting on :80 during package installation.
             run(["systemctl", "mask", "nginx.service"])
-            packages = ["curl", "ca-certificates", "tar", "python3-yaml", "openssl", "python3-venv", "nginx"]
+            packages = ["curl", "ca-certificates", "tar", "python3-yaml", "openssl", "python3-venv", "nginx", "logrotate"]
             run(["apt-get", "install", "-y", "--no-install-recommends"] + packages)
             install_release(arch)
-            print("安装并校验 Xray-core " + CORE_VERSION + "…", flush=True)
-            install_core(arch)
+            print("安装并校验 Xray-core " + core_version(c) + "…", flush=True)
+            install_core(arch, core_version(c))
             install_certbot()
+            install_log_rotation()
             state["files_installed"] = True
-            state["core_version"] = CORE_VERSION
+            state["core_version"] = core_version(c)
             save(state)
         print("配置 HTTPS 证书与自动续期…", flush=True)
         ensure_certificate(c)
@@ -2264,7 +2405,7 @@ def main():
             state["panel_ready"] = True
             save(state)
         check_db(c, state)
-        verify_core(arch)
+        verify_core(arch, core_version(c))
         run(["systemctl", "start", "x-ui"])
         api = API(c, state)
         wait_api(api)
@@ -2305,6 +2446,7 @@ def cli(argv=None, script_path=None):
         ("--configure-domain", "从配置文件读取域名和 HTTPS 选项，原地修改"),
         ("--configure-nodes", "从配置文件读取线路、ISP 和配额选项，原地修改"),
         ("--configure-traffic", "从配置文件读取月配额，保留原部署重置日"),
+        ("--switch-core", "仅切换 XRAY_VERSION 指定的固定核心；服务端验收失败时自动回退"),
         ("--traffic-status", "读取现有客户端原生用量"),
     ):
         actions.add_argument(flag, action="store_const", const=flag, dest="mode", help=help_text)
@@ -2353,6 +2495,9 @@ if __name__ == "__main__":
         elif MODE == "--configure-traffic":
             print("配额配置未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
             print("保留原生流量计数和部署日；使用相同参数及 --configure-traffic 续跑。")
+        elif MODE == "--switch-core":
+            print("核心切换未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
+            print("保留身份、数据库及切换记录；按上方状态处理，不要删除安装记录。")
         else:
             print("安装未完成：" + (str(exc) if not isinstance(exc, KeyboardInterrupt) else "用户中断"))
             print("保留状态和数据；使用同一份脚本重试。日志：/var/lib/3x-ui-bootstrap/install.log")

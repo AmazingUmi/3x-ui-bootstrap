@@ -4,14 +4,14 @@ English | [简体中文](security.zh-CN.md)
 
 This project reduces exposure by isolating the subscription backend, restricting public download paths, and protecting administrative credentials. A reachable port, an identifiable application, and an IP reputation label are different findings. The project does not promise to conceal proxy use or prevent IP classification.
 
-See the [Operations guide](operations.md) for deployment, acceptance checks, and troubleshooting, and the [Configuration reference](configuration.md) for fields and defaults. This document applies to fresh deployments of version 0.3.0.
+See the [Operations guide](operations.md) for deployment, acceptance checks, and troubleshooting, and the [Configuration reference](configuration.md) for fields and defaults. This document applies to fresh deployments of candidate 0.4.0-rc.1.
 
 ## 1. Service boundaries
 
 The default subscription path is:
 
 ```text
-Client → public 2096 / HTTPS / Nginx
+Client → public 38443 / HTTPS / Nginx
                          ↓ local HTTP
                   127.0.0.1:12096 / 3x-ui subscription backend
 ```
@@ -19,10 +19,10 @@ Client → public 2096 / HTTPS / Nginx
 | Endpoint | Default behavior | Boundary to preserve |
 | --- | --- | --- |
 | Node `443/TCP` | Xray serves VLESS + REALITY; Direct / ISP share an inbound and route by client identity | Node and subscription ports are independent; working nodes do not prove subscription refresh works |
-| Subscription `2096/TCP` | Nginx serves HTTPS and forwards only complete download URLs for managed clients | Keep it publicly reachable; simply closing it prevents subscription refresh |
+| Subscription `38443/TCP` | Nginx serves HTTPS and forwards only complete download URLs for managed clients | Keep it publicly reachable; simply closing it prevents subscription refresh |
 | Backend `12096/TCP` | Local HTTP bound only to `127.0.0.1` | Do not open it in cloud or host firewalls, or change it to a public listener |
-| Default panel `7777/TCP` | With `PANEL_HTTPS=false`, the panel binds to loopback and is reached through SSH | No public panel port is required |
-| Optional public panel `7777/TCP` | With `PANEL_HTTPS=true`, x-ui itself serves HTTPS | Separate from subscription Nginx; restrict access to administrative source IPs |
+| Default panel `7777/TCP` | With `PANEL_HTTPS=false`, the panel binds to loopback and is reached through SSH | Default and recommended; no fixed management-device IP or public panel port is needed |
+| Optional public panel `7777/TCP` | With `PANEL_HTTPS=true`, x-ui itself serves HTTPS | Explicit opt-in; use the SSH panel for changing management IPs |
 | Certificate validation `80/TCP` | Certbot listens temporarily during issuance and renewal | Keep firewall access allowed and the port available; no listener between validations is normal |
 
 A random panel path reduces common-path discovery. It does not replace authentication, source restrictions, or security updates. If the server has public IPv6, inspect its listeners and firewall separately; IPv4 checks or an A record alone are insufficient.
@@ -37,6 +37,8 @@ The gateway preserves the client User-Agent, fixes the backend Host and `Accept:
 
 The installer manages subscription IDs, paths, backend listeners, and gateway rules together. Manually adding clients or changing these fields does not update the gateway allowlist automatically. Use the configuration commands in the operations guide for the managed deployment.
 
+Valid downloads are limited per source IP to an average of one request per second, a burst of 20, and 16 actively processed connections; excess requests return 429. This does not require static client IPs. Invalid paths are still rejected directly. Limits do not eliminate TLS-handshake or bandwidth attacks, and devices behind one NAT share them. Logrotate checks the Nginx error log daily and also rotates it above 10 MiB, retaining seven archives with mode 600; this is not a real-time disk usage ceiling.
+
 ## 3. Credentials, files, and certificates
 
 - Before the first public start, the installer sets a random administrator username, password, and panel path. It does not first expose the panel with `admin/admin`.
@@ -45,11 +47,11 @@ The installer manages subscription IDs, paths, backend listeners, and gateway ru
 - `.gitignore` protects common filenames from accidental commits, not every custom filename. Review staged content before committing.
 - The subscription gateway allows only TLS 1.2 / 1.3. Startup and reload checks validate the certificate hostname or IP, validity, chain, and matching private key. Renewal validates the configuration before reloading the gateway; a public HTTPS panel also restarts x-ui to load its certificate.
 
-The installer verifies digests of pinned 3x-ui, Xray, and Certbot release files; Nginx comes from system package repositories. A matching digest establishes the expected download, not the absence of vulnerabilities. The installer does not configure firewalls, Fail2ban, Nginx request rate limits, or an OS patch policy.
+The installer verifies digests of pinned 3x-ui, Xray, and Certbot release files; Nginx comes from system package repositories. A matching digest establishes the expected download, not the absence of vulnerabilities. The installer does not configure firewalls, SSH authentication, Fail2ban, or an OS patch policy. Preflight reports the OS, running kernel, reboot marker, and basic SSH settings; no reboot marker does not prove that vulnerabilities are fixed.
 
 ## 4. What scanners can still observe
 
-Ordinary probes can still observe open ports, certificate domain names, and `Server: nginx`. `server_tokens off` hides the Nginx version; it does not guarantee that the software name is hidden. [Nginx documentation](https://nginx.org/en/docs/http/ngx_http_core_module.html#server_tokens)
+The new default port `38443` reduces common-port targeting but cannot prevent full-port scans or guarantee resistance to GFW probing. Ordinary probes can still observe open ports, certificate domain names, and `Server: nginx`. `server_tokens off` hides the Nginx version; it does not guarantee that the software name is hidden. [Nginx documentation](https://nginx.org/en/docs/http/ngx_http_core_module.html#server_tokens)
 
 Blocking static resources reduces direct identification of 3x-ui, but does not prevent an IP from being classified as a proxy. Reputation providers may also use hosting-network ownership and other observations. This project neither queries nor controls those classification results. [MaxMind classification documentation](https://support.maxmind.com/knowledge-base/articles/anonymizer-and-proxy-data-maxmind)
 
@@ -57,7 +59,7 @@ Renaming a `sub` subdomain or concealing a panel path does not replace isolation
 
 ## 5. Upstream versions and advisories
 
-As of **2026-11-01**, the project pins 3x-ui **3.10.2**, Xray-core **26.6.27**, and Certbot **5.8.0**. The affected ranges of the following four 3x-ui advisories include 3.10.2. Each lists **3.11.0** as the patched version:
+As of **2026-11-07**, this candidate pins 3x-ui **3.11.0**, defaults to Xray-core **26.10.31**, and pins Certbot **5.9.0**. All four advisories below list **3.11.0** as patched; the table retains applicability analysis for historical **3.10.2** deployments:
 
 | Official advisory | Required conditions | Applicability to the generated configuration |
 | --- | --- | --- |
@@ -66,11 +68,15 @@ As of **2026-11-01**, the project pins 3x-ui **3.10.2**, Xray-core **26.6.27**, 
 | [WG/AWG injection in subscription HTML](https://github.com/MHSanaei/3x-ui/security/advisories/GHSA-r59q-h589-mcjq) | The HTML page processes malicious external WG/AWG links, then a user executes the generated configuration | The gateway blocks the HTML page; the installer creates its own VLESS nodes and does not configure those external subscriptions |
 | [WG/AWG configuration-builder injection](https://github.com/MHSanaei/3x-ui/security/advisories/GHSA-vg5r-p8fc-gffw) | A malicious paired node or stored fields enter WG/AWG configuration, and a client executes injected hooks | The installer configures neither WG/AWG nor paired nodes; blocking HTML alone would not address this issue |
 
-These are applicability judgments based on the installer's generated configuration, **not a claim that 3.10.2 contains the fixes**. Manually enabling other features, proxying the panel, or changing credentials changes the assumptions. Plan compatibility testing of a patched version and repeat subscription, quota, and real-client checks after upgrading. Version pinning supports reproducibility; it does not replace security updates.
+The historical configuration analysis does not mean 3.10.2 contains the fixes. Repeat subscription, quota, and real-client checks with the candidate. Version pinning supports reproducibility; it does not replace security updates.
+
+[Xray 26.10.31](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31) disables MPTCP by default to reduce exposure; it does not patch the Linux kernel. Check the distribution, kernel branch, and running version, then update and reboot as required. [Ubuntu CVE status](https://ubuntu.com/security/CVE-2026-98432) varies by kernel branch. Explicit `XRAY_VERSION=26.6.27` is a compatibility comparison, not a long-term security recommendation.
+
+[Certbot 5.9.0](https://github.com/certbot/certbot/releases/tag/v5.9.0) fixes incorrect successful-domain reporting to renewal hooks. The installer pins the top-level wheel digest; transitive dependencies are still resolved from PyPI and are not a complete Python dependency lock.
 
 ## 6. Fresh-deployment acceptance record: 2026-11-01
 
-The user confirmed that this fresh deployment worked normally. No new client-version compatibility matrix was recorded. A separate unauthenticated, read-only public IPv4 assessment was repeated through the physical network interface, excluding false-positive port results caused by a local TUN accepting TCP connections.
+This is a **historical 0.3.0 record, not acceptance of this candidate**. The user confirmed that this fresh deployment worked normally. No new client-version compatibility matrix was recorded. A separate unauthenticated, read-only public IPv4 assessment was repeated through the physical network interface, excluding false-positive port results caused by a local TUN accepting TCP connections.
 
 | Check | Observed result |
 | --- | --- |

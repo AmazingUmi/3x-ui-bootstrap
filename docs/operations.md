@@ -34,8 +34,8 @@ Check both the cloud firewall and the host firewall. The script prints the requi
 | Actual SSH port, commonly 22 | Login, upload, SSH tunnel | Preserve management access |
 | 80 | Certificate issuance and renewal | Keep reachable |
 | 443 | Shared Direct / ISP node inbound | Allow |
-| 2096 | Nginx HTTPS subscription gateway | Allow |
-| 7777 | Public HTTPS panel | Allow only with `PANEL_HTTPS=true`; restrict management source IPs where possible |
+| 38443 | Nginx HTTPS subscription gateway | Allow |
+| 7777 | Public HTTPS panel | Do not expose by default; public only with explicit `PANEL_HTTPS=true` |
 | 12096 | Local subscription backend | Do not expose; listen only on `127.0.0.1` |
 
 If ports change, follow the configuration validator's output. The default SSH-only panel does not need public port 7777. Direct and ISP share `NODE_PORT`; there is no separate ISP inbound port.
@@ -48,6 +48,8 @@ Run locally, replacing the SSH username and VPS IP. Upload the script version yo
 scp ./install-3x-ui.sh ./config.json ubuntu@YOUR_VPS_IP:~/
 ssh ubuntu@YOUR_VPS_IP
 ~~~
+
+Install distribution security updates, reboot when needed, and check the running kernel first. `--check` reports the OS, kernel, reboot marker, and basic SSH authentication settings; it neither updates the OS nor certifies that a CVE is fixed. Confirm key login before disabling password authentication. A changing management-device IP does not require an IP allowlist.
 
 Run the preflight on the VPS:
 
@@ -93,10 +95,10 @@ On the VPS, check services and listeners:
 
 ~~~bash
 sudo systemctl status x-ui 3x-ui-subscription --no-pager
-sudo ss -lntp | grep -E ':(2096|12096)\b'
+sudo ss -lntp | grep -E ':(38443|12096)\b'
 ~~~
 
-With default ports, Nginx should listen on `0.0.0.0:2096` and x-ui only on `127.0.0.1:12096`. Substitute configured ports when necessary.
+With default ports, Nginx should listen on `0.0.0.0:38443` and x-ui only on `127.0.0.1:12096`. Substitute configured ports when necessary.
 
 Then verify from real clients:
 
@@ -104,9 +106,11 @@ Then verify from real clients:
 2. Browse through Direct and ISP separately. Direct should exit through the VPS IP; ISP should use the provider's exit.
 3. From your computer, request `/`, `/assets/`, and `/sub/assets/` on the subscription endpoint. They should return 404; a complete valid subscription URL should download successfully.
 
-Node connections use 443 by default; subscription updates use 2096. Test both. Server-side checks and a successful TCP connection do not replace real VLESS authentication and public client acceptance. A desktop TUN can intercept probes, so check the actual network path.
+Node connections use 443 by default; subscription updates use 38443. Test both. Server-side checks and a successful TCP connection do not replace real VLESS authentication and public client acceptance. A desktop TUN can intercept probes, so check the actual network path.
 
-On 2026-11-01, a user reported the new deployment working, and external IPv4 exposure checks were completed. See [Security](security.md) for their scope. Client versions were not recorded for this deployment, so this is not a compatibility claim for all versions.
+On 2026-11-17, the user confirmed the **0.4.0-rc.1** deployment was usable. The selected core, client versions, and itemized acceptance results were not recorded.
+
+On 2026-11-01, a user reported the **0.3.0** deployment working, and external IPv4 exposure checks were completed. See [Security](security.md) for their scope. Client versions were not recorded for this deployment, so this is not a compatibility claim for all versions.
 
 ## Routine maintenance
 
@@ -120,13 +124,28 @@ Run these commands on the VPS. The configuration file contains proposed settings
 | Apply domain, HTTPS panel, and email settings | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-domain` |
 | Apply names, mode, ISP, and quota settings | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-nodes` |
 | Change monthly quotas while preserving the original reset day | `sudo bash ~/install-3x-ui.sh --config ~/config.json --configure-traffic` |
+| Switch the checksum-pinned Xray core | `sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core` |
 | Repair the deployed REALITY target | `sudo bash ~/install-3x-ui.sh --repair-reality-target` |
 
 `--show`, `--traffic-status`, `--diagnose`, and `--repair-reality-target` use saved server data and do not require a configuration file. Each `--configure-*` command updates a specific group of fields; see [Configuration](configuration.md). Service changes can briefly interrupt connections. Follow the resulting instructions to update clients.
 
+`--configure-traffic` takes no trailing number. Edit `TOTAL_MONTHLY_GB` and `ISP_MONTHLY_GB` in the existing complete JSON configuration, then run the command above. Values are in GiB; a finite dual-line budget requires `0 < ISP_MONTHLY_GB < TOTAL_MONTHLY_GB`, with the remainder assigned to Direct. Existing usage and the original reset day are preserved.
+
 `--diagnose` uses temporary loopback copies without changing existing nodes or services; it does not reproduce the production ISP outbound. `--repair-reality-target` changes the production deployment and is intended for a diagnosed target problem.
 
 After manually changing ISP credentials in the panel, update the private configuration before running `--configure-nodes`. Keep managed subscription IDs, paths, and listeners under script control so they remain consistent with the Nginx allowlist.
+
+## Compare Xray versions
+
+`XRAY_VERSION` defaults to `26.10.31`. On a fresh deployment of this candidate, set it to `26.6.27` in the complete private configuration and run:
+
+~~~bash
+sudo bash ~/install-3x-ui.sh --config ~/config.json --switch-core
+~~~
+
+To restore the new build, set it back to `26.10.31` and repeat. The command verifies both archives before stopping services, replaces the core, and runs server checks. Failure triggers an attempt to restore and check the original core; successful rollback and incomplete rollback are reported separately. Resume an interruption with the same target and retain `core-change.json`. The command does not upgrade the panel, restore the database, or reset client identities, quotas, or the deployment day.
+
+Server checks cannot detect an iPhone-only failure. Record actual Shadowrocket and Mihomo versions, effective TLS fingerprints, Wi-Fi/cellular results, Direct/ISP exits, reconnection, and subscription quota refreshes. Explicitly select the comparison build if needed. The old core is not a long-term security recommendation. Do not update the core automatically from the panel; arbitrary versions and migrations of old deployments remain unsupported.
 
 ## Inspect services and certificate renewal
 
@@ -166,7 +185,7 @@ Check the authoritative A record and public resolver answers, disable CDN proxyi
 
 ### The panel or subscription is unreachable
 
-Check the complete URL's scheme, port, random path, and subscription ID. The SSH panel needs a running tunnel; a public HTTPS panel needs its port allowed. If subscription updates fail, inspect the gateway on 2096 and DNS separately.
+Check the complete URL's scheme, port, random path, and subscription ID. The SSH panel needs a running tunnel; a public HTTPS panel needs its port allowed. If subscription updates fail, inspect the gateway on 38443 and DNS separately.
 
 ### The subscription root or assets return 404
 
@@ -184,9 +203,11 @@ Check the upstream proxy, production inbound authentication and forwarding, and 
 
 ### Shadowrocket cannot connect
 
-The historical version-specific result is **Shadowrocket 2.2.92 (3345) + Xray-core 26.6.27**, from the previous dual-inbound deployment. The current fresh deployment was reported working, but its client versions were not recorded, so it does not extend that version matrix.
+The historical version-specific result is **Shadowrocket 2.2.92 (3345) + Xray-core 26.6.27**, from the previous dual-inbound deployment. Later 0.3.0 feedback did not record client versions. Neither record establishes real-client acceptance of 0.4.0-rc.1 or the new core.
 
-Check that the core remains at the pinned 26.6.27 version. Verify the UUID, Vision flow, REALITY public key, SNI, short ID, address, and port. After changing either core or client, retest import, browsing, exit IP, and quota refresh.
+Check that the running core matches saved `XRAY_VERSION`. Verify the UUID, Vision flow, REALITY public key, SNI, short ID, address, and port. Current REALITY requires an X25519MLKEM768 key share: inspect the effective per-node TLS fingerprint in Shadowrocket. A URI containing `fp=chrome` is not proof of compatibility. Leave `minClientVer` blank; lowering a version limit cannot fix every fingerprint mismatch. After upgrades or subscription refreshes, retest Wi-Fi, cellular, exits, reconnection, and quota refresh.
+
+References: [REALITY configuration](https://docs.sanaei.dev/zh/docs/config/reality/), [Shadowrocket 2.2.93 development notes](https://t.me/s/ShadowrocketNews?before=1642).
 
 ### Installation or a configuration change was interrupted
 

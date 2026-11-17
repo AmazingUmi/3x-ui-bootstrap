@@ -4,6 +4,19 @@ English | [简体中文](CHANGELOG.zh-CN.md)
 
 Dates refer to publication on the repository's `main` branch.
 
+## 0.4.0-rc.1 — 2026-11-17 (test candidate)
+
+- Default to and recommend the loopback-only panel through an SSH key tunnel; examples no longer recommend exposing the panel.
+- Change the default public HTTPS subscription port from 2096 to 38443, retaining custom ports and loopback backend 12096.
+- Update and verify official 3x-ui 3.11.0, Xray 26.10.31, and Certbot 5.9.0 packages with pinned amd64 / arm64 digests.
+- Add `XRAY_VERSION` and `--switch-core` for the new core and historical 26.6.27 comparison. Cache both builds before stopping; roll back on server-check failure without restoring the database or resetting identity or quotas.
+- Add subscription request/connection limits and Nginx error-log rotation. Report the running kernel, reboot marker, and basic SSH authentication settings without modifying the OS or SSH.
+- Separate subscription-format checks and local Xray tests from real Shadowrocket / Mihomo acceptance.
+
+Validation: **85 offline checks** passed on macOS (Python 3.13) and Ubuntu 24.04 (Python 3.12). Official new and historical artifacts were SHA-256 verified. Isolated amd64 and arm64 containers passed real panel CLI/API, native quotas, both HTTPS subscription formats, bidirectional core switching, and injected-failure rollback checks. These local and container checks do not cover systemd boot, real ACME issuance/renewal, public or ISP forwarding, or phone-client acceptance.
+
+Status: On 2026-11-17, the user confirmed this candidate deployment was usable. The selected core, client versions, and itemized acceptance results were not recorded. Retain candidate status; not a formal release. Fresh installations only; no migration of older deployments.
+
 ## 0.3.0 — 2026-11-01
 
 - Put Nginx in front of the public HTTPS subscription port (default 2096), with the 3x-ui HTTP subscription backend bound only to `127.0.0.1` on `SUB_BACKEND_PORT` (default 12096).

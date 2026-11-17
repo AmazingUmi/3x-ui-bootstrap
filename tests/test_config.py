@@ -3,6 +3,7 @@ from io import StringIO
 from pathlib import Path
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -45,13 +46,28 @@ class ConfigTests(unittest.TestCase):
     def test_only_server_ip_is_required_and_others_have_defaults(self):
         c = self.parse({"SERVER_IP": "8.8.8.8"})
         self.assertEqual(c["NODE_NAME"], "MyNode")
-        self.assertEqual(c["SUB_PORT"], 2096)
+        self.assertEqual(c["SUB_PORT"], 38443)
         self.assertEqual(c["SUB_BACKEND_PORT"], 12096)
+        self.assertEqual(c["XRAY_VERSION"], "26.10.31")
+        self.assertEqual(self.app.initial_settings(c, {"base_path": "/test/"})["webListen"], "127.0.0.1")
+
+    def test_domain_does_not_implicitly_expose_panel(self):
+        c = self.parse({"SERVER_IP": "8.8.8.8", "SUB_DOMAIN": "node.example.com"})
+        settings = self.app.initial_settings(c, {"base_path": "/test/"})
+        self.assertEqual(settings["webListen"], "127.0.0.1")
+        self.assertEqual(settings["webCertFile"], "")
+        self.assertTrue(settings["subURI"].startswith("https://node.example.com:38443/"))
+
+    def test_only_checksum_pinned_cores_are_selectable(self):
+        self.assertEqual(self.parse(dict(self.data, XRAY_VERSION="26.6.27"))["XRAY_VERSION"], "26.6.27")
+        for value in ("latest", "26.10.21", "https://example.com/core", "26.6.27;id"):
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "XRAY_VERSION"):
+                self.parse(dict(self.data, XRAY_VERSION=value))
 
     def test_subscription_backend_port_can_be_overridden(self):
         c = self.parse(dict(self.data, SUB_BACKEND_PORT=32096))
         self.assertEqual(c["SUB_BACKEND_PORT"], 32096)
-        self.assertEqual(c["SUB_PORT"], 2096)
+        self.assertEqual(c["SUB_PORT"], 38443)
 
     def test_public_domain_panel(self):
         c = self.parse(dict(self.data, SUB_DOMAIN="Node.Example.Com", PANEL_HTTPS=True))
@@ -113,11 +129,11 @@ class ConfigTests(unittest.TestCase):
 
     def test_invalid_ports_and_conflicts(self):
         for key, value in (("NODE_PORT", 0), ("NODE_PORT", 65536), ("NODE_PORT", -1),
-                           ("NODE_PORT", 80), ("NODE_PORT", 7777), ("PANEL_PORT", 2096),
+                           ("NODE_PORT", 80), ("NODE_PORT", 7777), ("PANEL_PORT", 38443),
                            ("SUB_BACKEND_PORT", 0), ("SUB_BACKEND_PORT", 65536),
                            ("SUB_BACKEND_PORT", -1), ("SUB_BACKEND_PORT", 80),
                            ("SUB_BACKEND_PORT", 443), ("SUB_BACKEND_PORT", 7777),
-                           ("SUB_BACKEND_PORT", 2096), ("NODE_PORT", 12096),
+                           ("SUB_BACKEND_PORT", 38443), ("NODE_PORT", 12096),
                            ("PANEL_PORT", 12096), ("SUB_PORT", 12096)):
             with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
                 self.parse(dict(self.data, **{key: value}))
@@ -129,8 +145,8 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(self.app.node_ports(c), [443])
                 self.assertNotIn("ISP_NODE_PORT", c)
                 instructions = self.app.firewall_instructions(c)
-                self.assertEqual(instructions.count("443/TCP"), 1)
-                self.assertNotIn("8443", instructions)
+                self.assertEqual(len(re.findall(r"(?<!\d)443/TCP\b", instructions)), 1)
+                self.assertIsNone(re.search(r"(?<!\d)8443(?!\d)", instructions))
 
     def test_nickname_and_host_validation(self):
         for key, value in (("NODE_NAME", "two words"), ("NODE_NAME", "a/b"), ("NODE_NAME", ""),
